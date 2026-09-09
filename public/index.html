@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Emmaboda GK chargers</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%232a78d6'/%3E%3Cpath d='M18 5 8 18h7l-1 9 10-13h-7z' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="28" height="28"><circle cx="16" cy="16" r="15" fill="currentColor"/><path d="M18 5 8 18h7l-1 9 10-13h-7z" fill="#fff"/></svg>
+      </span>
+      <span class="brand-text">
+        <span class="brand-title">Emmaboda GK chargers</span>
+        <span class="brand-sub" id="brand-sub">OCPI dashboard</span>
+      </span>
+    </div>
+    <nav class="tabs" aria-label="Views">
+      <a href="#live" data-tab="live">Live</a>
+      <a href="#records" data-tab="records">Records</a>
+      <a href="#chargers" data-tab="chargers">Chargers</a>
+      <a href="#connection" data-tab="connection">Connection</a>
+    </nav>
+    <div class="conn" id="conn-indicator" title="Connection state">
+      <span class="conn-dot" data-state="unknown"></span>
+      <span class="conn-text">Checking...</span>
+    </div>
+  </header>
+
+  <main id="app">
+    <section id="view-live" class="view" hidden></section>
+    <section id="view-records" class="view" hidden></section>
+    <section id="view-chargers" class="view" hidden></section>
+    <section id="view-connection" class="view" hidden></section>
+  </main>
+
+  <footer class="footer">
+    <span>Data via OCPI from ChargeNode. Runs locally; the token never leaves this machine.</span>
+  </footer>
+
+  <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

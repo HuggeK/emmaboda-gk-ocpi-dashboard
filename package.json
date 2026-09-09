@@ -1,0 +1,17 @@
+{
+  "name": "emmaboda-gk-ocpi-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local browser dashboard for Emmaboda GK's EV chargers via the ChargeNode OCPI API",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "demo": "node server/index.js --demo",
+    "check": "node server/index.js --check",
+    "test": "node --test server/"
+  },
+  "license": "UNLICENSED"
+}

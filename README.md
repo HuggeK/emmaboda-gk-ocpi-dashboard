@@ -7,6 +7,9 @@ the OCPI API that ChargeNode exposes for the chargers.
   points are charging / available / out of service, ongoing sessions.
 - **Records** - charge detail records (CDRs): sessions, kWh, cost, time plugged
   in, energy per day, per-charger breakdown, sortable table, CSV export.
+- **Analysis** - how often several chargers run at once, the busy hours
+  (weekday × hour heatmap) and an estimate of the effektavgift the chargers
+  alone would cause, computed from the charge records.
 - **Chargers** - the locations, charging points (EVSEs) and connectors ChargeNode
   publishes.
 - **Connection** - exactly what the OCPI server answered, for troubleshooting.
@@ -176,6 +179,30 @@ browser  ──►  http://127.0.0.1:3000  ──►  server/index.js  ──►
 Local API routes: `/api/status`, `/api/live`, `/api/locations`,
 `/api/sessions`, `/api/cdrs`, `/api/tariffs`. All are GET and return JSON.
 
+## Analysis tab
+
+The Analysis tab works from the same charge records as the Records tab. What
+it shows and how it is computed:
+
+- **Simultaneous sessions.** Plugged-in overlap comes straight from the
+  records' start and end times. "Charging" is an estimate, because ChargeNode
+  reports one energy total per session and no power curve: each car is assumed
+  to charge at a fixed rate (default 11 kW) from plug-in until its energy is
+  delivered, then idle. "Spread evenly" instead spreads the energy over the
+  whole plugged-in time, which is a floor.
+- **Busy hours.** Average estimated charger power per weekday and clock hour
+  over the chosen range, as a heatmap with a table view.
+- **Monthly peaks and effektavgift.** The highest hourly average per month,
+  capped at ChargeNode's group limit (default 43.5 kW, the 63 A setting),
+  multiplied by the tariff (default 120 kr/kW) gives what the chargers alone
+  would cost in effektavgift. Hours are clock hours, which is how grid
+  companies bill.
+
+Everything on the tab is **chargers only**. The real effektavgift is billed
+on the whole subscription's highest hourly average, so the club's other loads
+in the same hours are missing. Seeing the real peak needs the grid company's
+hourly meter values (E.ON's API) or a HAN-port meter on the main incomer.
+
 ## Troubleshooting
 
 **"Not connected" / HTTP 401.** The versions endpoint is the first call in any
@@ -222,6 +249,7 @@ server/live.js         "Right now" calculation from locations + sessions
 server/snapshot.js     One JSON snapshot of everything the UI shows (static site)
 server/demo-data.js    Deterministic demo data (OCPI 2.2.1 shaped)
 public/                index.html, styles.css, app.js (no build step)
+public/analysis.js     Concurrency, hourly profile and monthly peak maths (pure functions)
 public/ocpi/           Static OCPI versions / credentials JSON for the handshake
 scripts/build-snapshot.js             public/ + data/snapshot.json -> dist/
 scripts/ocpi-handshake.js             Exchanges a registration key for the real key

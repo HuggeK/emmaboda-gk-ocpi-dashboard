@@ -1,18 +1,61 @@
-// Posts the outcome of a snapshot run as a comment on one tracking issue, so
-// every run (pass or fail) produces a GitHub notification. Called from the
-// workflow through actions/github-script; all inputs arrive as environment
-// variables set in the workflow file. CommonJS on purpose: package.json says
-// "type": "module", and github-script's require() cannot load ES modules.
+// Tracks the outcome of snapshot runs on one issue. Every run rewrites a
+// status line in the issue body, which does not notify anyone. A comment,
+// which does notify, is posted only when the outcome changes and once a day
+// while the runs keep failing. Called from the workflow through
+// actions/github-script; all inputs arrive as environment variables set in
+// the workflow file. CommonJS on purpose: package.json says "type": "module",
+// and github-script's require() cannot load ES modules.
 'use strict';
 
 const LABEL = 'ocpi-key-heartbeat';
 const TITLE = 'OCPI key heartbeat and dashboard publishing';
 const TIME_ZONE = 'Europe/Stockholm';
+const REMINDER_MS = 24 * 3_600_000;
+const STATE_MARKER = /<!-- snapshot-state: (\{.*?\}) -->/s;
+
+const INTRO = [
+  'The **Snapshot to GitHub Pages** workflow tracks its runs here.',
+  '',
+  '- The status line below is rewritten on every run (no notification).',
+  '- A comment is posted when the outcome changes, and once a day while the runs keep failing, so each of those arrives as a notification.',
+  '- Each run calls ChargeNode with the OCPI access key from the `SECRET_KEY` secret and rebuilds the public dashboard.',
+  '- If a run reports **HTTP 401** on the versions endpoint, the key is dead: get a new registration key from ChargeNode and run `npm run handshake` (see the README).',
+  '',
+  `Keep this issue open; the workflow finds it by the \`${LABEL}\` label. Closing it only makes the next run open a new one.`,
+].join('\n');
+
+const TOKEN_A_HINT = '- The key opens the versions and credentials endpoints but not `locations`, `sessions` or `cdrs`. That is how an OCPI registration token ("token A") behaves before the credentials handshake; run `npm run handshake` with it (see the README).';
+
+const LABELS = {
+  ok: 'Snapshot published',
+  module_unauthorized: 'Key accepted, data refused',
+  unauthorized: 'Key rejected',
+  deploy_failed: 'Deploy to GitHub Pages failed',
+  cancelled: 'Run cancelled',
+  error: 'Run failed',
+};
 
 function stamp(iso) {
   const date = iso ? new Date(iso) : new Date();
   if (Number.isNaN(date.getTime())) return String(iso);
   return date.toLocaleString('sv-SE', { timeZone: TIME_ZONE, dateStyle: 'short', timeStyle: 'short' });
+}
+
+function outcomeOf(env) {
+  if (env.JOB_STATUS === 'success' && env.BUILD_RESULT === 'ok') return 'ok';
+  if (env.BUILD_RESULT && env.BUILD_RESULT !== 'ok') return env.BUILD_RESULT;
+  if (env.DEPLOY_OUTCOME === 'failure') return 'deploy_failed';
+  return env.JOB_STATUS === 'cancelled' ? 'cancelled' : 'error';
+}
+
+function readState(body) {
+  const match = STATE_MARKER.exec(body || '');
+  if (!match) return null;
+  try {
+    return JSON.parse(match[1]);
+  } catch {
+    return null;
+  }
 }
 
 async function findOrCreateIssue({ github, context }) {
@@ -26,17 +69,7 @@ async function findOrCreateIssue({ github, context }) {
     if (err.status !== 422) throw err; // 422: the label already exists
   }
 
-  const body = [
-    'The **Snapshot to GitHub Pages** workflow comments here after every run, so each pass and each failure shows up as a notification.',
-    '',
-    '- The OCPI key ChargeNode issued expires after **7 days without use**. Each run calls ChargeNode with it, which keeps it alive.',
-    '- On success the run also rebuilds the public dashboard.',
-    '- If a run reports **HTTP 401**, the key has expired: ask ChargeNode for a new key and store it with `gh secret set SECRET_KEY`.',
-    '',
-    `Keep this issue open; the workflow finds it by the \`${LABEL}\` label. Closing it only makes the next run open a new one.`,
-  ].join('\n');
-
-  const create = (assignees) => github.rest.issues.create({ owner, repo, title: TITLE, body, labels: [LABEL], assignees });
+  const create = (assignees) => github.rest.issues.create({ owner, repo, title: TITLE, body: INTRO, labels: [LABEL], assignees });
   try {
     return (await create([owner])).data; // assigning the owner subscribes them to the thread
   } catch (err) {
@@ -45,31 +78,31 @@ async function findOrCreateIssue({ github, context }) {
   }
 }
 
-const TOKEN_A_HINT = '- The key opens the versions and credentials endpoints but not `locations`, `sessions` or `cdrs`. That is how an OCPI registration token ("token A") behaves before the credentials handshake, which needs an OCPI endpoint on our side. Ask ChargeNode for a key with direct read access to the CPO modules, or to complete the registration for us.';
+function runUrlOf(context) {
+  return `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+}
 
-function buildComment({ context, env }) {
-  const result = env.BUILD_RESULT;
-  const ok = env.JOB_STATUS === 'success' && result === 'ok';
-  // The build publishes a data-less site when the key opens versions but not
-  // the data modules; a later workflow step then marks the run failed.
-  const degraded = result === 'module_unauthorized' && env.DEPLOY_OUTCOME === 'success';
+function buildComment({ context, env, previous }) {
+  const outcome = outcomeOf(env);
   const { owner, repo } = context.repo;
-  const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
   const trigger = context.eventName === 'schedule'
     ? 'Scheduled run'
     : context.eventName === 'workflow_dispatch'
       ? 'Manual run'
       : `Run after push to ${String(context.ref).replace('refs/heads/', '')}`;
   const keyUsed = env.KEY_USED === 'true';
+  const recovered = outcome === 'ok' && previous && previous.outcome !== 'ok';
   const lines = [];
 
-  if (ok) {
-    lines.push(`### ✅ Snapshot published · ${stamp(env.GENERATED_AT)}`);
+  if (outcome === 'ok') {
+    lines.push(`### ✅ ${recovered ? 'Recovered: snapshot published' : 'Snapshot published'} · ${stamp(env.GENERATED_AT)}`);
     lines.push('');
     lines.push(`- OCPI key used against ChargeNode: **yes** (OCPI ${env.OCPI_VERSION})`);
     lines.push(`- Dashboard: ${env.PAGE_URL || '(no page URL reported)'}`);
     lines.push(`- ${env.EVSES} charging points · ${env.CDR_COUNT} charge records over ${env.CDR_DAYS} days · last 30 days: ${env.SESSIONS_30D} sessions, ${env.KWH_30D} kWh`);
-  } else if (degraded) {
+  } else if (outcome === 'module_unauthorized' && env.DEPLOY_OUTCOME === 'success') {
+    // The build publishes a data-less site when the key opens versions but not
+    // the data modules; a later workflow step then marks the run failed.
     lines.push(`### ⚠️ Key accepted, but ChargeNode refused the data modules (HTTP 401) · ${stamp(env.GENERATED_AT)}`);
     lines.push('');
     lines.push('- OCPI key used against ChargeNode: **yes** (the versions and credentials endpoints answered)');
@@ -82,34 +115,69 @@ function buildComment({ context, env }) {
       : env.DEPLOY_OUTCOME === 'failure'
         ? 'deploying to GitHub Pages'
         : `an earlier step (job status: ${env.JOB_STATUS})`;
-    const heading = result === 'module_unauthorized'
+    const heading = outcome === 'module_unauthorized'
       ? '⚠️ Key accepted, but ChargeNode refused the data modules (HTTP 401)'
-      : result === 'unauthorized'
+      : outcome === 'unauthorized'
         ? '❌ ChargeNode rejected the OCPI key (HTTP 401)'
-        : '❌ Run failed';
+        : `❌ ${LABELS[outcome] || 'Run failed'}`;
     lines.push(`### ${heading} · ${stamp()}`);
     lines.push('');
     lines.push(`- Failed while: **${failedWhile}**`);
     lines.push(`- OCPI key used against ChargeNode: **${keyUsed ? 'yes' : 'no'}**${keyUsed ? ' (the versions and credentials endpoints answered)' : ' (no endpoint accepted it, so ChargeNode may not count this run as use)'}`);
     if (env.BUILD_ERROR) lines.push(`- Error: \`${env.BUILD_ERROR}\``);
-    if (result === 'unauthorized') {
-      lines.push('- **The key looks expired or revoked.** Ask ChargeNode for a new key, store it, then re-run:');
+    if (outcome === 'unauthorized') {
+      lines.push('- **The key looks expired or revoked.** Get a new registration key from ChargeNode, exchange it with `npm run handshake`, store the result, then re-run:');
       lines.push('  ```');
       lines.push(`  gh secret set SECRET_KEY -R ${owner}/${repo}`);
       lines.push(`  gh workflow run "Snapshot to GitHub Pages" -R ${owner}/${repo}`);
       lines.push('  ```');
     }
-    if (result === 'module_unauthorized') lines.push(TOKEN_A_HINT);
+    if (outcome === 'module_unauthorized') lines.push(TOKEN_A_HINT);
   }
-  lines.push(`- ${trigger} · [run log](${runUrl})`);
+  lines.push(`- ${trigger} · [run log](${runUrlOf(context)})`);
+  return { outcome, body: lines.join('\n') };
+}
+
+function statusLine(outcome, env, now) {
+  const icon = outcome === 'ok' ? '✅' : outcome === 'module_unauthorized' ? '⚠️' : '❌';
+  const details = outcome === 'ok'
+    ? ` · ${env.EVSES} charging points, ${env.CDR_COUNT} records, last 30 days ${env.SESSIONS_30D} sessions / ${env.KWH_30D} kWh`
+    : env.BUILD_ERROR ? ` · ${env.BUILD_ERROR}` : '';
+  return `${icon} **${LABELS[outcome] || outcome}** · ${stamp(now.toISOString())}${details}`;
+}
+
+function renderBody({ context, env, outcome, now, state }) {
+  const lines = [
+    INTRO,
+    '',
+    '## Status',
+    '',
+    `- Latest run: ${statusLine(outcome, env, now)} ([run log](${runUrlOf(context)}))`,
+    `- Last notification: ${state.notified_at ? stamp(state.notified_at) : 'never'}`,
+  ];
+  if (env.PAGE_URL) lines.push(`- Dashboard: ${env.PAGE_URL}`);
+  lines.push('', `<!-- snapshot-state: ${JSON.stringify(state)} -->`);
   return lines.join('\n');
 }
 
 module.exports = async ({ github, context, core }) => {
+  const env = process.env;
+  const now = new Date();
   const issue = await findOrCreateIssue({ github, context });
-  const body = buildComment({ context, env: process.env });
-  await github.rest.issues.createComment({ ...context.repo, issue_number: issue.number, body });
-  core.info(`Reported on issue #${issue.number}: ${body.split('\n')[0]}`);
+  const previous = readState(issue.body);
+  const { outcome, body } = buildComment({ context, env, previous });
+
+  const changed = !previous || previous.outcome !== outcome;
+  const reminderDue = outcome !== 'ok' && Boolean(previous) && now.getTime() - Date.parse(previous.notified_at || 0) >= REMINDER_MS;
+  const notify = changed || reminderDue;
+  if (notify) await github.rest.issues.createComment({ ...context.repo, issue_number: issue.number, body });
+
+  const state = { outcome, at: now.toISOString(), notified_at: notify ? now.toISOString() : previous?.notified_at || null };
+  await github.rest.issues.update({ ...context.repo, issue_number: issue.number, body: renderBody({ context, env, outcome, now, state }) });
+  core.info(`${notify ? 'Commented on' : 'Updated status of'} issue #${issue.number}: ${body.split('\n')[0]}`);
 };
 
 module.exports.buildComment = buildComment;
+module.exports.outcomeOf = outcomeOf;
+module.exports.readState = readState;
+module.exports.renderBody = renderBody;

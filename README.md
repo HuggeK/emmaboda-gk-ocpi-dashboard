@@ -14,7 +14,7 @@ the OCPI API that ChargeNode exposes for the chargers.
 Everything runs on your own computer. A tiny Node server keeps the OCPI token
 out of the browser and proxies the OCPI calls (the OCPI server does not allow
 browser calls directly). No packages are installed; only Node.js 22 or newer is
-needed. A read-only copy is also published on GitHub Pages twice a week; see
+needed. A read-only copy is also published on GitHub Pages every hour; see
 [Published dashboard](#published-dashboard-github-pages).
 
 ## Quick start
@@ -66,15 +66,19 @@ workflow in `.github/workflows/snapshot-pages.yml`. Each run:
    `data/snapshot.json` holding locations, live status and the charge records
    of the last 400 days (so the "This year" range is always complete).
 3. Deploys the result to GitHub Pages (Pages source: GitHub Actions).
-4. Comments ✅ or ❌ on the tracking issue labelled `ocpi-key-heartbeat`
-   (created on the first run and assigned to the repository owner), so every
-   run arrives as a GitHub notification. GitHub also e-mails failed runs on
-   its own.
+4. Tracks the outcome on the issue labelled `ocpi-key-heartbeat` (created on
+   the first run and assigned to the repository owner). The status line in
+   the issue body is rewritten on every run without notifying anyone; a
+   comment, which does notify, is posted when the outcome changes and once a
+   day while runs keep failing. GitHub also e-mails failed runs on its own,
+   which can be switched off under Settings → Notifications → Actions.
 
-The workflow runs Monday and Thursday at 05:17 UTC, on every push to `main`
-that touches the app, and on demand from the Actions tab (*Snapshot to GitHub
-Pages* → *Run workflow*). Two runs a week means one delayed or failed run does
-not let the key lapse.
+The workflow runs every hour (at :17), on every push to `main` that touches
+the app, and on demand from the Actions tab (*Snapshot to GitHub Pages* →
+*Run workflow*). Each run is billed as one Actions minute, so hourly runs use
+about 720 of the account's 3,000 minutes a month, and the OCPI specification's
+advice to pull lists "in hours, not minutes" is respected. Change the `cron`
+line to adjust; `17 6-20 * * *` would limit it to daytime.
 
 The site is public even though the repository is private, so the published
 snapshot leaves out the fields that identify who charged (`token_uid` and
@@ -84,8 +88,8 @@ the Records date ranges count back from the snapshot time instead of today.
 
 If ChargeNode accepts the key on the versions endpoint but refuses the data
 modules, the site is still published, without data, so the Connection tab can
-say why; the run is then marked failed and the tracking issue gets a ⚠️
-comment. `public/ocpi/` holds our minimal OCPI presence (versions, version
+say why; the run is then marked failed and the tracking issue shows ⚠️.
+`public/ocpi/` holds our minimal OCPI presence (versions, version
 details and a credentials object as static JSON) so that ChargeNode has
 something to reach during the credentials handshake that turns a registration
 key into a real access key.
@@ -93,7 +97,7 @@ key into a real access key.
 Things to know:
 
 - GitHub can delay scheduled runs by minutes to hours when the platform is
-  busy; the twice-weekly cadence absorbs that.
+  busy, so an hourly run may land late or be skipped now and then.
 - Scheduled workflows in *public* repositories are switched off after 60 days
   without commits. This repository is private, so that rule does not apply
   today; if it is ever made public, watch for GitHub's "workflow disabled"

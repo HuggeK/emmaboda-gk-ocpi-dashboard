@@ -50,13 +50,21 @@ jobs:
         with:
           node-version: 22
 
+      - uses: actions/configure-pages@v5
+        id: pages
+
+      # Extends the previously published snapshot with the records changed
+      # since it was built (a handful of requests to ChargeNode). Once a day,
+      # in the 03:xx UTC run, and on manual runs, everything is refetched.
       - name: Build static dashboard from ChargeNode data
         id: build
         env:
           OCPI_TOKEN: ${{ secrets.SECRET_KEY }}
-        run: node scripts/build-snapshot.js --out dist
-
-      - uses: actions/configure-pages@v5
+          SNAPSHOT_BASE_URL: ${{ steps.pages.outputs.base_url }}/data/snapshot.json
+        run: |
+          full=""
+          if [ "$(date -u +%H)" = "03" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then full="--full"; fi
+          node scripts/build-snapshot.js --out dist $full
 
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -80,7 +88,9 @@ jobs:
           OCPI_VERSION: ${{ steps.build.outputs.ocpi_version }}
           EVSES: ${{ steps.build.outputs.evses }}
           CDR_COUNT: ${{ steps.build.outputs.cdr_count }}
-          CDR_DAYS: ${{ steps.build.outputs.cdr_days }}
+          CDR_SINCE: ${{ steps.build.outputs.cdr_since }}
+          CDR_FETCHED: ${{ steps.build.outputs.cdr_fetched }}
+          INCREMENTAL: ${{ steps.build.outputs.incremental }}
           SESSIONS_30D: ${{ steps.build.outputs.sessions_30d }}
           KWH_30D: ${{ steps.build.outputs.kwh_30d }}
           PAGE_URL: ${{ steps.deployment.outputs.page_url }}

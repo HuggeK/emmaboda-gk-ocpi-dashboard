@@ -99,7 +99,7 @@ function buildComment({ context, env, previous }) {
     lines.push('');
     lines.push(`- OCPI key used against ChargeNode: **yes** (OCPI ${env.OCPI_VERSION})`);
     lines.push(`- Dashboard: ${env.PAGE_URL || '(no page URL reported)'}`);
-    lines.push(`- ${env.EVSES} charging points · ${env.CDR_COUNT} charge records over ${env.CDR_DAYS} days · last 30 days: ${env.SESSIONS_30D} sessions, ${env.KWH_30D} kWh`);
+    lines.push(`- ${env.EVSES} charging points · ${env.CDR_COUNT} charge records since ${env.CDR_SINCE} (${env.INCREMENTAL === 'true' ? `${env.CDR_FETCHED} changed since the previous snapshot` : 'full fetch'}) · last 30 days: ${env.SESSIONS_30D} sessions, ${env.KWH_30D} kWh`);
   } else if (outcome === 'module_unauthorized' && env.DEPLOY_OUTCOME === 'success') {
     // The build publishes a data-less site when the key opens versions but not
     // the data modules; a later workflow step then marks the run failed.

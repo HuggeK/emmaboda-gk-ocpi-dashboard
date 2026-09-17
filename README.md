@@ -82,6 +82,14 @@ snapshot leaves out the fields that identify who charged (`token_uid` and
 the header says "Snapshot · x ago", the Live tab does not auto-refresh, and
 the Records date ranges count back from the snapshot time instead of today.
 
+If ChargeNode accepts the key on the versions endpoint but refuses the data
+modules, the site is still published, without data, so the Connection tab can
+say why; the run is then marked failed and the tracking issue gets a ⚠️
+comment. `public/ocpi/` holds our minimal OCPI presence (versions, version
+details and a credentials object as static JSON) so that ChargeNode has
+something to reach during the credentials handshake that turns a registration
+key into a real access key.
+
 Things to know:
 
 - GitHub can delay scheduled runs by minutes to hours when the platform is
@@ -183,6 +191,7 @@ server/live.js         "Right now" calculation from locations + sessions
 server/snapshot.js     One JSON snapshot of everything the UI shows (static site)
 server/demo-data.js    Deterministic demo data (OCPI 2.2.1 shaped)
 public/                index.html, styles.css, app.js (no build step)
+public/ocpi/           Static OCPI versions / credentials JSON for the handshake
 scripts/build-snapshot.js             public/ + data/snapshot.json -> dist/
 .github/workflows/snapshot-pages.yml  Twice-weekly fetch, deploy and report
 .github/scripts/report-run.cjs        Comments each run's outcome on the tracking issue

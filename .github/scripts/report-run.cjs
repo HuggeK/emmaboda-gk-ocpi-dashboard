@@ -45,8 +45,14 @@ async function findOrCreateIssue({ github, context }) {
   }
 }
 
+const TOKEN_A_HINT = '- The key opens the versions and credentials endpoints but not `locations`, `sessions` or `cdrs`. That is how an OCPI registration token ("token A") behaves before the credentials handshake, which needs an OCPI endpoint on our side. Ask ChargeNode for a key with direct read access to the CPO modules, or to complete the registration for us.';
+
 function buildComment({ context, env }) {
-  const ok = env.JOB_STATUS === 'success';
+  const result = env.BUILD_RESULT;
+  const ok = env.JOB_STATUS === 'success' && result === 'ok';
+  // The build publishes a data-less site when the key opens versions but not
+  // the data modules; a later workflow step then marks the run failed.
+  const degraded = result === 'module_unauthorized' && env.DEPLOY_OUTCOME === 'success';
   const { owner, repo } = context.repo;
   const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
   const trigger = context.eventName === 'schedule'
@@ -63,8 +69,14 @@ function buildComment({ context, env }) {
     lines.push(`- OCPI key used against ChargeNode: **yes** (OCPI ${env.OCPI_VERSION})`);
     lines.push(`- Dashboard: ${env.PAGE_URL || '(no page URL reported)'}`);
     lines.push(`- ${env.EVSES} charging points · ${env.CDR_COUNT} charge records over ${env.CDR_DAYS} days · last 30 days: ${env.SESSIONS_30D} sessions, ${env.KWH_30D} kWh`);
+  } else if (degraded) {
+    lines.push(`### ⚠️ Key accepted, but ChargeNode refused the data modules (HTTP 401) · ${stamp(env.GENERATED_AT)}`);
+    lines.push('');
+    lines.push('- OCPI key used against ChargeNode: **yes** (the versions and credentials endpoints answered)');
+    lines.push(`- Dashboard published without data: ${env.PAGE_URL || '(no page URL reported)'}`);
+    if (env.BUILD_ERROR) lines.push(`- Error: \`${env.BUILD_ERROR}\``);
+    lines.push(TOKEN_A_HINT);
   } else {
-    const result = env.BUILD_RESULT;
     const failedWhile = env.BUILD_OUTCOME === 'failure'
       ? 'fetching data from ChargeNode'
       : env.DEPLOY_OUTCOME === 'failure'
@@ -87,9 +99,7 @@ function buildComment({ context, env }) {
       lines.push(`  gh workflow run "Snapshot to GitHub Pages" -R ${owner}/${repo}`);
       lines.push('  ```');
     }
-    if (result === 'module_unauthorized') {
-      lines.push('- The key opens the versions and credentials endpoints but not `locations`, `sessions` or `cdrs`. That is how an OCPI registration token ("token A") behaves before the credentials handshake, which needs an OCPI endpoint on our side. Ask ChargeNode for a key with direct read access to the CPO modules, or to complete the registration for us.');
-    }
+    if (result === 'module_unauthorized') lines.push(TOKEN_A_HINT);
   }
   lines.push(`- ${trigger} · [run log](${runUrl})`);
   return lines.join('\n');

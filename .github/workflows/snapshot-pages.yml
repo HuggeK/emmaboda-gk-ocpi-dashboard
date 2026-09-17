@@ -83,3 +83,11 @@ jobs:
           script: |
             const report = require('./.github/scripts/report-run.cjs');
             await report({ github, context, core });
+
+      # The site is published even when ChargeNode refuses the data modules
+      # (see scripts/build-snapshot.js), but the run must still show as failed.
+      - name: Mark the run failed when ChargeNode refused the data
+        if: steps.build.outputs.result != 'ok'
+        run: |
+          echo "::error::${{ steps.build.outputs.error }}"
+          exit 1

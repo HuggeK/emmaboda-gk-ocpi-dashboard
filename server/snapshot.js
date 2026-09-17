@@ -22,6 +22,46 @@ export function stripPersonalFields(value) {
   return value;
 }
 
+function pickDiscovery(discovery) {
+  return {
+    version: discovery.version,
+    versionUrl: discovery.versionUrl,
+    availableVersions: discovery.availableVersions,
+    endpoints: discovery.endpoints,
+    encoding: discovery.encoding,
+    attempts: discovery.attempts,
+    discoveredAt: discovery.discoveredAt,
+  };
+}
+
+const EMPTY_PAGE = { items: [], pages: 0, total: 0, date_from: null, date_to: null };
+
+// A snapshot with the connection facts but no data, for when ChargeNode accepts
+// the key on the versions endpoint but refuses the data modules (an OCPI
+// registration token, "token A"). The site is still published so the
+// Connection tab can say what happened and the static OCPI files stay online.
+export function buildEmptySnapshot({
+  client,
+  discovery,
+  dataError,
+  now = new Date(),
+  cdrDays = DEFAULT_CDR_DAYS,
+  generator = 'local',
+}) {
+  const live = computeLive({ locations: [], sessions: [], todayKwh: null, now });
+  const status = {
+    mode: 'snapshot',
+    generator,
+    generated_at: now.toISOString(),
+    versionsUrl: client.status().versionsUrl,
+    discovery: pickDiscovery(discovery),
+    cdr_window: { from: null, to: now.toISOString(), days: cdrDays },
+    counts: { locations: 0, evses: 0, cdrs: 0, cdr_pages: 0, sessions_24h: 0 },
+    data_error: dataError,
+  };
+  return { status, locations: [], live, cdrs: { ...EMPTY_PAGE }, sessions: { ...EMPTY_PAGE } };
+}
+
 export async function buildSnapshot({
   client,
   now = new Date(),
@@ -60,15 +100,7 @@ export async function buildSnapshot({
     generator,
     generated_at: now.toISOString(),
     versionsUrl: client.status().versionsUrl,
-    discovery: {
-      version: discovery.version,
-      versionUrl: discovery.versionUrl,
-      availableVersions: discovery.availableVersions,
-      endpoints: discovery.endpoints,
-      encoding: discovery.encoding,
-      attempts: discovery.attempts,
-      discoveredAt: discovery.discoveredAt,
-    },
+    discovery: pickDiscovery(discovery),
     cdr_window: { from: cdrsFrom, to: now.toISOString(), days: cdrDays },
     counts: {
       locations: locations.length,
@@ -77,6 +109,7 @@ export async function buildSnapshot({
       cdr_pages: cdrsPage.pages,
       sessions_24h: sessions.length,
     },
+    data_error: null,
   };
 
   const snapshot = {

@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createOcpiClient, OcpiError } from '../server/ocpi-client.js';
 import { createDemoClient } from '../server/demo-data.js';
-import { buildSnapshot, DEFAULT_CDR_DAYS } from '../server/snapshot.js';
+import { buildSnapshot, buildEmptySnapshot, DEFAULT_CDR_DAYS } from '../server/snapshot.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -120,18 +120,34 @@ async function main() {
   setOutputs({ key_used: 'true' });
   console.log(`Connected: OCPI ${discovery.version}, modules: ${Object.keys(discovery.endpoints).join(', ')}`);
 
-  const snapshot = await buildSnapshot({
-    client,
-    cdrDays: config.cdrDays,
-    generator: config.demo ? 'demo' : inGitHubActions ? 'github-actions' : 'local',
-  });
+  const generator = config.demo ? 'demo' : inGitHubActions ? 'github-actions' : 'local';
+  let snapshot;
+  let dataError = null;
+  try {
+    snapshot = await buildSnapshot({ client, cdrDays: config.cdrDays, generator });
+  } catch (err) {
+    // A key that opens versions but not the data modules still gets a
+    // published site: the Connection tab can then say why, and the static
+    // OCPI files under /ocpi stay online for the credentials handshake.
+    if (!(err instanceof OcpiError) || err.details.code !== 'UNAUTHORIZED') throw err;
+    dataError = err.toJSON();
+    snapshot = buildEmptySnapshot({ client, discovery, dataError, cdrDays: config.cdrDays, generator });
+  }
   writeSite(snapshot);
 
   const info = describe(snapshot);
   const size = fs.statSync(path.join(config.outDir, 'data', 'snapshot.json')).size;
   console.log(`Snapshot written to ${config.outDir} (${Math.round(size / 1024)} kB) in ${Date.now() - startedAt} ms`);
-  console.log(`  ${info.evses} charging points, ${info.cdr_count} charge records over ${info.cdr_days} days (${info.cdr_pages} pages), ${info.sessions_30d} sessions / ${info.kwh_30d} kWh in the last 30 days`);
 
+  if (dataError) {
+    const explanation = explain('module_unauthorized', dataError);
+    console.error(explanation);
+    setOutputs({ result: 'module_unauthorized', error: dataError.message, ...info });
+    addSummary(`### Site published without data\n\n${explanation}`);
+    return;
+  }
+
+  console.log(`  ${info.evses} charging points, ${info.cdr_count} charge records over ${info.cdr_days} days (${info.cdr_pages} pages), ${info.sessions_30d} sessions / ${info.kwh_30d} kWh in the last 30 days`);
   setOutputs({ result: 'ok', ...info });
   addSummary([
     '### Snapshot built',
@@ -146,15 +162,19 @@ async function main() {
   ].join('\n'));
 }
 
+function explain(result, details) {
+  return {
+    unauthorized: 'ChargeNode rejected the OCPI key on the versions endpoint (HTTP 401). The key expires after a week without use; ask ChargeNode for a new one and update the SECRET_KEY repository secret.',
+    module_unauthorized: `ChargeNode accepted the key on the versions and credentials endpoints but refused the data module (HTTP ${details.httpStatus || 401} from ${details.url}). That is how an OCPI registration token ("token A") behaves before the credentials handshake: ask ChargeNode for a key with direct read access to locations, sessions and cdrs, or to complete the registration.`,
+    error: `Snapshot failed: ${details.message}`,
+  }[result];
+}
+
 main().catch((err) => {
   const details = err instanceof OcpiError ? err.toJSON() : { message: err?.message || String(err) };
   const unauthorized = details.code === 'UNAUTHORIZED';
   const result = !unauthorized ? 'error' : keyAccepted ? 'module_unauthorized' : 'unauthorized';
-  const explanation = {
-    unauthorized: 'ChargeNode rejected the OCPI key on the versions endpoint (HTTP 401). The key expires after a week without use; ask ChargeNode for a new one and update the SECRET_KEY repository secret.',
-    module_unauthorized: `ChargeNode accepted the key on the versions and credentials endpoints but refused the data module (HTTP 401 from ${details.url}). That is how an OCPI registration token ("token A") behaves before the credentials handshake: ask ChargeNode for a key with direct read access to locations, sessions and cdrs, or to complete the registration.`,
-    error: `Snapshot failed: ${details.message}`,
-  }[result];
+  const explanation = explain(result, details);
   console.error(explanation);
   console.error(JSON.stringify(details, null, 2));
   setOutputs({ result, error: details.message });

@@ -1,4 +1,5 @@
 // Dashboard front-end. Talks only to the local server's /api routes.
+import { analyze, DEFAULT_OPTIONS as ANALYSIS_DEFAULTS } from './analysis.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -21,6 +22,12 @@ const state = {
     sort: { key: 'start', dir: 'desc' },
     data: null,
   },
+  analysis: {
+    preset: '12m',
+    options: { ...ANALYSIS_DEFAULTS },
+    tableView: false,
+  },
+  chargerCount: 0,
 };
 
 // ---------------------------------------------------------------- formatting
@@ -172,7 +179,7 @@ function referenceTime() {
 }
 
 // -------------------------------------------------------------------- router
-const views = { live: renderLive, records: renderRecords, chargers: renderChargers, connection: renderConnection };
+const views = { live: renderLive, records: renderRecords, analysis: renderAnalysis, chargers: renderChargers, connection: renderConnection };
 
 function currentTab() {
   const hash = location.hash.replace('#', '');
@@ -231,6 +238,7 @@ async function loadLocationLabels() {
   try {
     const { items } = await api('/api/locations');
     state.locationLabels.clear();
+    state.chargerCount = items.reduce((n, l) => n + l.evses.length, 0);
     for (const location of items) {
       for (const evse of location.evses) {
         const label = evse.physical_reference || evse.evse_id || evse.uid;
@@ -633,6 +641,311 @@ function drawEnergyChart(container, items, range) {
     const p = points[Number(g.dataset.index)];
     const endLabel = weekly ? ` – ${fmtDate(p.start + 6 * DAY_MS)}` : '';
     tooltip.innerHTML = `<strong>${esc(fmtDate(p.start))}${endLabel}</strong>${fmtNum(p.kwh, 1)} kWh · ${p.sessions} session${p.sessions === 1 ? '' : 's'}`;
+    tooltip.hidden = false;
+    tooltip.style.left = `${Math.min(event.clientX + 14, window.innerWidth - 240)}px`;
+    tooltip.style.top = `${event.clientY + 14}px`;
+  });
+  container.addEventListener('mouseleave', () => {
+    tooltip.hidden = true;
+  });
+}
+
+// ------------------------------------------------------------------- analysis
+// Simultaneous charging, busy hours and the effektavgift the chargers alone
+// would cause. The maths lives in analysis.js; this file only draws it.
+const ANALYSIS_PRESETS = [
+  { key: '90d', label: '90 days' },
+  { key: 'ytd', label: 'This year' },
+  { key: '12m', label: '12 months' },
+  { key: 'all', label: 'All (400 days)' },
+];
+
+function analysisRange(preset) {
+  const now = referenceTime();
+  const startOfToday = new Date(now);
+  startOfToday.setHours(0, 0, 0, 0);
+  const to = new Date(startOfToday.getTime() + DAY_MS);
+  switch (preset) {
+    case '90d': return { from: new Date(startOfToday.getTime() - 89 * DAY_MS), to };
+    case 'ytd': return { from: new Date(now.getFullYear(), 0, 1), to };
+    case 'all': return { from: new Date(startOfToday.getTime() - 399 * DAY_MS), to };
+    default: {
+      const from = new Date(startOfToday);
+      from.setFullYear(from.getFullYear() - 1);
+      return { from, to };
+    }
+  }
+}
+
+function monthLabel(key, style = 'long') {
+  const [year, month] = key.split('-').map(Number);
+  return new Date(year, month - 1, 1).toLocaleDateString(undefined, style === 'long' ? { month: 'short', year: 'numeric' } : { month: 'short', year: '2-digit' });
+}
+
+function weekdayLabels() {
+  const monday = new Date(2024, 0, 1); // a Monday
+  return Array.from({ length: 7 }, (_, i) => new Date(monday.getTime() + i * DAY_MS).toLocaleDateString(undefined, { weekday: 'short' }));
+}
+
+const hourLabel = (h) => `${String(h).padStart(2, '0')}:00`;
+
+async function renderAnalysis() {
+  const root = $('#view-analysis');
+  const a = state.analysis;
+  const o = a.options;
+  const range = analysisRange(a.preset);
+  root.innerHTML = `
+    <div class="view-head">
+      <h2>Analysis</h2>
+      <span class="subtle">Simultaneous charging, busy hours and the effektavgift the chargers alone would cause</span>
+    </div>
+    <div class="filters" id="analysis-filters">
+      ${ANALYSIS_PRESETS.map((p) => `<button class="chip ${p.key === a.preset ? 'active' : ''}" data-preset="${p.key}">${p.label}</button>`).join('')}
+      <span class="custom">
+        <label>Per car <input type="number" id="analysis-rate" value="${o.rateKw}" min="1" max="22" step="0.1"> kW</label>
+        <label>Cap <input type="number" id="analysis-cap" value="${o.capKw}" min="0" step="0.5"> kW</label>
+        <label>Tariff <input type="number" id="analysis-kr" value="${o.krPerKw}" min="0" step="1"> kr/kW</label>
+        <label><input type="checkbox" id="analysis-even" ${o.model === 'even' ? 'checked' : ''}> Spread evenly (floor)</label>
+        <button id="analysis-apply" class="primary">Apply</button>
+      </span>
+    </div>
+    <div id="analysis-body"><div class="loading">Analysing charge records...</div></div>`;
+
+  $('#analysis-filters').addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-preset]');
+    if (chip) {
+      a.preset = chip.dataset.preset;
+      renderAnalysis();
+    }
+    if (event.target.id === 'analysis-apply') {
+      const rate = Number($('#analysis-rate').value);
+      a.options = {
+        ...o,
+        rateKw: rate > 0 ? rate : ANALYSIS_DEFAULTS.rateKw,
+        capKw: Math.max(0, Number($('#analysis-cap').value) || 0),
+        krPerKw: Math.max(0, Number($('#analysis-kr').value) || 0),
+        model: $('#analysis-even').checked ? 'even' : 'front',
+      };
+      renderAnalysis();
+    }
+  });
+
+  const body = $('#analysis-body');
+  try {
+    const query = `date_from=${encodeURIComponent(range.from.toISOString())}&date_to=${encodeURIComponent(range.to.toISOString())}`;
+    const [data] = await Promise.all([api(`/api/cdrs?${query}`), state.chargerCount ? null : loadLocationLabels()]);
+    const chargers = state.chargerCount || ANALYSIS_DEFAULTS.chargers;
+    const result = analyze(data.items, { from: range.from.getTime(), to: range.to.getTime() }, { ...o, chargers, now: referenceTime().getTime() });
+    body.innerHTML = analysisHtml(result, range, o, chargers);
+    drawHeatmap($('#analysis-heatmap'), result.matrix);
+    drawMonthlyChart($('#analysis-months'), result.months, o);
+    const card = $('#analysis-heatmap-card');
+    const toggle = $('#analysis-heatmap-toggle');
+    const paintToggle = () => {
+      card.dataset.view = a.tableView ? 'table' : 'chart';
+      toggle.textContent = a.tableView ? 'Show chart' : 'Show table';
+    };
+    toggle.addEventListener('click', () => {
+      a.tableView = !a.tableView;
+      paintToggle();
+    });
+    paintToggle();
+  } catch (err) {
+    body.innerHTML = errorHtml(err);
+  }
+}
+
+function analysisHtml(result, range, options, chargers) {
+  const { plugged, charging, peakHour, floorPeakHour, months, floorMonths, top } = result;
+  const floorByMonth = new Map(floorMonths.map((m) => [m.month, m]));
+  const fullMonths = months.filter((m) => !m.partial);
+  const billing = fullMonths.at(-1) || months.at(-1) || null;
+  const averageCost = fullMonths.length ? fullMonths.reduce((sum, m) => sum + m.cost, 0) / fullMonths.length : null;
+  const when = (peak) => (peak.count ? `${fmtDateTime(peak.start)} – ${fmtTime(peak.end)}` : 'never in this range');
+  const modelLabel = options.model === 'even'
+    ? 'each session’s energy spread evenly over its plugged-in time (a floor)'
+    : `each car charging at ${fmtNum(options.rateKw, 1)} kW from plug-in until its energy is delivered, then idle`;
+  const capLabel = options.capKw > 0 ? `, with the total capped at ${fmtNum(options.capKw, 1)} kW (ChargeNode’s 63 A limit)` : '';
+
+  const tiles = [
+    { label: 'Most plugged in at once', value: `${plugged.peak.count}<small>of ${chargers}</small>`, hint: when(plugged.peak) },
+    { label: 'Most charging at once (estimated)', value: `${charging.peak.count}<small>of ${chargers}</small>`, hint: when(charging.peak) },
+    {
+      label: 'Highest hourly average',
+      value: peakHour ? `${fmtNum(peakHour.kw, 1)}<small>kW</small>` : '–',
+      hint: peakHour ? `${fmtDateTime(peakHour.at)} · ${peakHour.sessions} car${peakHour.sessions === 1 ? '' : 's'} · floor ${fmtNum(floorPeakHour?.kw ?? 0, 1)} kW` : 'No charging in this range',
+    },
+    {
+      label: 'Effektavgift, chargers alone',
+      value: billing ? `${fmtMoney(billing.cost, 'SEK')}<small>per month</small>` : '–',
+      hint: billing
+        ? `${monthLabel(billing.month)}${billing.partial ? ' (partial month)' : ''}: ${fmtNum(billing.peakKw, 1)} kW × ${fmtNum(options.krPerKw, 0)} kr/kW${averageCost !== null ? ` · full months average ${fmtMoney(averageCost, 'SEK')}` : ''}`
+        : 'No months in this range',
+    },
+  ];
+
+  const pluggedTotal = plugged.hours.slice(1).reduce((sum, h) => sum + h, 0);
+  const chargingTotal = charging.hours.slice(1).reduce((sum, h) => sum + h, 0);
+  const concurrencyRows = Array.from({ length: chargers }, (_, i) => i + 1).map((n) => `<tr>
+    <td>${n === chargers ? `All ${chargers}` : n} ${n === 1 ? 'charger' : 'chargers'}</td>
+    <td class="num">${fmtNum(plugged.hours[n] || 0, 0)}</td>
+    <td class="num">${fmtNum(charging.hours[n] || 0, 0)}</td>
+    <td class="num">${chargingTotal ? Math.round(((charging.hours[n] || 0) / chargingTotal) * 100) : 0}%</td>
+  </tr>`).join('');
+
+  return `
+    <div class="notice warn"><h3>Chargers only</h3>Everything on this tab comes from ChargeNode’s charge records, so it covers the ${chargers} chargers and nothing else. The effektavgift is billed on the whole subscription’s highest hourly average, and the club’s other loads in the same hours are not included here. To see the real peak we would need the grid company’s hourly meter values (E.ON’s API) or a HAN-port meter on the main incomer.</div>
+    <div class="grid grid-tiles">
+      ${tiles.map((t) => `<div class="card tile"><span class="label">${esc(t.label)}</span><span class="value">${t.value}</span><span class="hint">${esc(t.hint)}</span></div>`).join('')}
+    </div>
+    <div class="subtle">Model: ChargeNode reports one energy total per session, not a power curve. Figures assume ${modelLabel}${capLabel}. Hours are clock hours, as the tariff counts them. Plugged-in time comes straight from the records; “charging” is the estimate. ${result.records} sessions, ${fmtNum(pluggedTotal, 0)} h plugged in.</div>
+    <div class="card" id="analysis-heatmap-card" data-view="chart">
+      <div class="card-head"><h3>Busy hours: average charger power by weekday and hour (kW)</h3><span class="subtle">${fmtDate(range.from)} – ${fmtDate(range.to.getTime() - DAY_MS)}</span><span class="spacer"></span><button id="analysis-heatmap-toggle">Show table</button></div>
+      <div class="heatmap" id="analysis-heatmap"></div>
+      <div class="table-wrap heatmap-table">${heatmapTable(result.matrix)}</div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>Highest hourly average per month (kW)</h3><span class="subtle">lighter bars are partial months</span></div>
+      <div class="chart" id="analysis-months"></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Month</th><th class="num">Peak hour kW</th><th class="num">Floor kW</th><th>When</th><th class="num">Cars</th><th class="num">× ${fmtNum(options.krPerKw, 0)} kr/kW</th></tr></thead>
+        <tbody>${months.map((m) => `<tr>
+          <td>${esc(monthLabel(m.month))}${m.partial ? ' <span class="subtle">(partial)</span>' : ''}</td>
+          <td class="num">${fmtNum(m.peakKw, 1)}</td>
+          <td class="num">${fmtNum(floorByMonth.get(m.month)?.peakKw ?? 0, 1)}</td>
+          <td>${m.at !== null ? fmtDateTime(m.at) : '–'}</td>
+          <td class="num">${m.sessions}</td>
+          <td class="num">${fmtMoney(m.cost, 'SEK')}</td>
+        </tr>`).join('') || '<tr><td colspan="6" class="empty">No charging in this range</td></tr>'}</tbody>
+      </table></div>
+    </div>
+    <div class="grid grid-analysis">
+      <div class="card">
+        <div class="card-head"><h3>Simultaneous sessions</h3><span class="subtle">hours in the range</span></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>At the same time</th><th class="num">Plugged in, h</th><th class="num">Charging (est.), h</th><th class="num">Share</th></tr></thead>
+          <tbody>${concurrencyRows}</tbody>
+        </table></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Top hours</h3><span class="subtle">highest estimated charger power</span></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Hour</th><th class="num">kW</th><th class="num">Cars</th></tr></thead>
+          <tbody>${top.map((h) => `<tr><td>${fmtDateTime(h.at)}</td><td class="num">${fmtNum(h.kw, 1)}</td><td class="num">${h.sessions}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">No charging in this range</td></tr>'}</tbody>
+        </table></div>
+      </div>
+    </div>`;
+}
+
+function heatmapTable(matrix) {
+  const weekdays = weekdayLabels();
+  return `<table>
+    <thead><tr><th></th>${Array.from({ length: 24 }, (_, h) => `<th class="num">${String(h).padStart(2, '0')}</th>`).join('')}</tr></thead>
+    <tbody>${matrix.cells.map((row, wd) => `<tr><td>${esc(weekdays[wd])}</td>${row.map((v) => `<td class="num">${v > 0 ? fmtNum(v, 1) : '–'}</td>`).join('')}</tr>`).join('')}</tbody>
+  </table>`;
+}
+
+function drawHeatmap(container, matrix) {
+  if (!container) return;
+  const W = 960;
+  const padL = 44;
+  const padR = 8;
+  const padT = 18;
+  const padB = 6;
+  const cellW = (W - padL - padR) / 24;
+  const cellH = 26;
+  const H = padT + 7 * cellH + padB;
+  const weekdays = weekdayLabels();
+  const max = matrix.max || 0;
+  const binOf = (v) => (v <= 0 || max <= 0 ? 0 : Math.min(5, Math.max(1, Math.ceil((v / max) * 5))));
+
+  const cells = [];
+  for (let wd = 0; wd < 7; wd += 1) {
+    for (let h = 0; h < 24; h += 1) {
+      const bin = binOf(matrix.cells[wd][h]);
+      const x = padL + h * cellW;
+      const y = padT + wd * cellH;
+      cells.push(`<rect class="cell" data-wd="${wd}" data-h="${h}" x="${x + 1}" y="${y + 1}" width="${cellW - 2}" height="${cellH - 2}" rx="3" fill="${bin ? `var(--heat-${bin})` : 'var(--surface-2)'}"></rect>`);
+    }
+  }
+  const hourTicks = [0, 3, 6, 9, 12, 15, 18, 21].map((h) => `<text class="tick" x="${padL + h * cellW + 2}" y="${padT - 6}">${String(h).padStart(2, '0')}</text>`).join('');
+  const weekdayTicks = weekdays.map((name, wd) => `<text class="tick" x="${padL - 6}" y="${padT + wd * cellH + cellH / 2 + 4}" text-anchor="end">${esc(name)}</text>`).join('');
+  container.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Average charger power by weekday and hour">${hourTicks}${weekdayTicks}${cells.join('')}</svg>
+    <div class="ramp-legend"><span>0 kW</span>${[1, 2, 3, 4, 5].map((b) => `<i style="background:var(--heat-${b})"></i>`).join('')}<span>${fmtNum(max, 1)} kW</span><span class="spacer"></span><span>average over the days in the range</span></div>`;
+
+  const tooltip = $('#tooltip');
+  container.addEventListener('mousemove', (event) => {
+    const cell = event.target.closest('rect.cell');
+    if (!cell) {
+      tooltip.hidden = true;
+      return;
+    }
+    const wd = Number(cell.dataset.wd);
+    const h = Number(cell.dataset.h);
+    tooltip.innerHTML = `<strong>${fmtNum(matrix.cells[wd][h], 1)} kW</strong>${esc(weekdays[wd])} ${hourLabel(h)}–${hourLabel((h + 1) % 24)} · average over ${matrix.days[wd]} day${matrix.days[wd] === 1 ? '' : 's'}`;
+    tooltip.hidden = false;
+    tooltip.style.left = `${Math.min(event.clientX + 14, window.innerWidth - 240)}px`;
+    tooltip.style.top = `${event.clientY + 14}px`;
+  });
+  container.addEventListener('mouseleave', () => {
+    tooltip.hidden = true;
+  });
+}
+
+function drawMonthlyChart(container, months, options) {
+  if (!container) return;
+  const points = months;
+  const W = 960;
+  const H = 240;
+  const padL = 46;
+  const padR = 10;
+  const padT = 14;
+  const padB = 26;
+  const innerW = W - padL - padR;
+  const innerH = H - padT - padB;
+  const tickCount = 4;
+  const cap = options.capKw > 0 ? options.capKw : 0;
+  const tickStep = niceStep((Math.max(0, cap, ...points.map((p) => p.peakKw)) || 1) / tickCount);
+  const maxValue = tickStep * tickCount;
+  const slot = innerW / Math.max(1, points.length);
+  const barW = Math.min(24, Math.max(2, slot - 2));
+  const y = (v) => padT + innerH - (v / maxValue) * innerH;
+  const ticks = Array.from({ length: tickCount + 1 }, (_, i) => tickStep * i);
+  const maxPoint = points.reduce((best, p) => (p.peakKw > (best?.peakKw ?? -1) ? p : best), null);
+
+  const bars = points.map((p, i) => {
+    const x = padL + i * slot + (slot - barW) / 2;
+    const top = y(p.peakKw);
+    const h = padT + innerH - top;
+    const r = Math.min(4, barW / 2, h);
+    const path = h <= 0
+      ? ''
+      : `M${x},${padT + innerH} V${top + r} Q${x},${top} ${x + r},${top} H${x + barW - r} Q${x + barW},${top} ${x + barW},${top + r} V${padT + innerH} Z`;
+    const label = p === maxPoint && p.peakKw > 0
+      ? `<text class="bar-label" x="${x + barW / 2}" y="${top - 5}" text-anchor="middle">${fmtNum(p.peakKw, 1)}</text>`
+      : '';
+    return `<g data-index="${i}"><rect class="bar-hit" x="${padL + i * slot}" y="${padT}" width="${slot}" height="${innerH}"></rect>${path ? `<path class="bar${p.partial ? ' partial' : ''}" d="${path}"></path>` : ''}${label}<text class="tick" x="${x + barW / 2}" y="${H - 8}" text-anchor="middle">${esc(monthLabel(p.month, 'short'))}</text></g>`;
+  }).join('');
+  const capLine = cap > 0 && cap <= maxValue
+    ? `<line class="cap-line" x1="${padL}" x2="${W - padR}" y1="${y(cap)}" y2="${y(cap)}"></line><text class="tick" x="${W - padR}" y="${y(cap) - 4}" text-anchor="end">cap ${fmtNum(cap, 1)} kW</text>`
+    : '';
+
+  container.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Highest hourly average per month">
+    ${ticks.map((t) => `<line class="grid-line" x1="${padL}" x2="${W - padR}" y1="${y(t)}" y2="${y(t)}"></line><text class="tick" x="${padL - 6}" y="${y(t) + 4}" text-anchor="end">${fmtNum(t, 0)}</text>`).join('')}
+    <line class="axis-line" x1="${padL}" x2="${W - padR}" y1="${padT + innerH}" y2="${padT + innerH}"></line>
+    ${capLine}
+    ${bars}
+  </svg>`;
+
+  const tooltip = $('#tooltip');
+  container.addEventListener('mousemove', (event) => {
+    const g = event.target.closest('g[data-index]');
+    if (!g) {
+      tooltip.hidden = true;
+      return;
+    }
+    const p = points[Number(g.dataset.index)];
+    tooltip.innerHTML = `<strong>${fmtNum(p.peakKw, 1)} kW</strong>${esc(monthLabel(p.month))}${p.partial ? ' (partial)' : ''} · ${p.at !== null ? fmtDateTime(p.at) : '–'} · ${p.sessions} car${p.sessions === 1 ? '' : 's'} · ${fmtMoney(p.cost, 'SEK')}`;
     tooltip.hidden = false;
     tooltip.style.left = `${Math.min(event.clientX + 14, window.innerWidth - 240)}px`;
     tooltip.style.top = `${event.clientY + 14}px`;

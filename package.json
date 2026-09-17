@@ -13,6 +13,7 @@
     "check": "node server/index.js --check",
     "build": "node scripts/build-snapshot.js",
     "build:demo": "node scripts/build-snapshot.js --demo",
+    "handshake": "node scripts/ocpi-handshake.js",
     "test": "node --test \"server/**/*.test.js\""
   },
   "license": "UNLICENSED"

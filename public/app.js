@@ -9,6 +9,7 @@ const DAY_MS = 86_400_000;
 const state = {
   status: null,
   liveTimer: null,
+  currentTab: null,
   snapshotMode: false, // true when served as a static site, see loadSnapshot()
   snapshot: null,
   snapshotError: null,
@@ -183,6 +184,9 @@ function route() {
   clearTimeout(state.liveTimer);
   for (const link of $$('.tabs a')) link.classList.toggle('active', link.dataset.tab === tab);
   for (const view of $$('.view')) view.hidden = view.id !== `view-${tab}`;
+  // A newly chosen tab starts at the top, even if the previous one was scrolled far down.
+  if (state.currentTab && state.currentTab !== tab) window.scrollTo({ top: 0 });
+  state.currentTab = tab;
   views[tab]();
 }
 window.addEventListener('hashchange', route);
@@ -470,7 +474,7 @@ function recordsHtml(items, range) {
       <div class="card-head"><h3>Energy per ${days > 120 ? 'week' : 'day'} (kWh)</h3><span class="subtle">${fmtDate(range.from)} – ${fmtDate(range.to.getTime() - DAY_MS)}</span></div>
       <div class="chart" id="records-chart"></div>
     </div>
-    <div class="grid" style="grid-template-columns: minmax(280px, 1fr) minmax(0, 2.2fr)">
+    <div class="grid grid-records">
       <div class="card">
         <div class="card-head"><h3>Per charging point</h3></div>
         <div class="table-wrap"><table>

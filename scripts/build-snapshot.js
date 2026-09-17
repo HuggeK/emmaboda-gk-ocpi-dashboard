@@ -2,17 +2,23 @@
 // data/snapshot.json with everything the UI shows, ready for GitHub Pages or
 // any static host. The OCPI key is only used here, at build time.
 //
-//   node scripts/build-snapshot.js [--out dist] [--days 400] [--demo] [--verbose]
+//   node scripts/build-snapshot.js [--out dist] [--base-url <url>] [--full]
+//                                  [--history-from <ISO date>] [--demo] [--verbose]
 //
 // Configuration comes from the environment (OCPI_TOKEN, OCPI_VERSIONS_URL, ...)
 // or from .env, exactly like the local server. Inside GitHub Actions the script
 // also writes step outputs and a job summary so the workflow can report.
+//
+// Charge records: with --base-url the previously published snapshot is fetched
+// and only the records changed since it was built are requested from the CPO
+// (a handful of requests instead of a full history). --full ignores the base
+// and refetches everything from --history-from (default: all the CPO has).
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createOcpiClient, OcpiError } from '../server/ocpi-client.js';
 import { createDemoClient } from '../server/demo-data.js';
-import { buildSnapshot, buildEmptySnapshot, DEFAULT_CDR_DAYS } from '../server/snapshot.js';
+import { buildSnapshot, buildEmptySnapshot } from '../server/snapshot.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -34,7 +40,9 @@ const config = {
   demo: args.includes('--demo') || process.env.OCPI_DEMO === '1',
   verbose: args.includes('--verbose') || process.env.OCPI_VERBOSE === '1',
   outDir: path.resolve(ROOT, argValue('--out') || 'dist'),
-  cdrDays: Number(argValue('--days') || DEFAULT_CDR_DAYS),
+  baseUrl: argValue('--base-url') || process.env.SNAPSHOT_BASE_URL || '',
+  full: args.includes('--full'),
+  historyFrom: argValue('--history-from') || process.env.OCPI_HISTORY_FROM || null,
   versionsUrl: process.env.OCPI_VERSIONS_URL || 'https://ocpi.chargenode.eu/ocpi/cpo/versions',
   token: process.env.OCPI_TOKEN || '',
   tokenEncoding: process.env.OCPI_TOKEN_ENCODING || 'auto',
@@ -99,6 +107,24 @@ function writeSite(snapshot) {
   fs.writeFileSync(path.join(outDir, '.nojekyll'), '');
 }
 
+// The previously published snapshot, to extend instead of refetching all
+// records. Any problem means a full fetch, never a failed build.
+async function loadBase() {
+  if (!config.baseUrl || config.full || config.demo) return null;
+  const url = `${config.baseUrl}${config.baseUrl.includes('?') ? '&' : '?'}nocache=${Date.now()}`;
+  try {
+    const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(20_000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const base = await res.json();
+    if (!base?.status?.generated_at || !Array.isArray(base?.cdrs?.items)) throw new Error('not a snapshot');
+    console.log(`Previous snapshot from ${base.status.generated_at} with ${base.cdrs.items.length} records loaded from ${config.baseUrl}`);
+    return base;
+  } catch (err) {
+    console.warn(`No usable previous snapshot at ${config.baseUrl} (${err.message}); fetching the full history.`);
+    return null;
+  }
+}
+
 function describe(snapshot) {
   const { status, live, cdrs } = snapshot;
   const thirtyDaysAgo = Date.parse(status.generated_at) - 30 * 86_400_000;
@@ -110,8 +136,11 @@ function describe(snapshot) {
     evses: live.summary.evses_total,
     evses_charging: live.summary.evses_charging,
     cdr_count: cdrs.items.length,
+    cdr_since: status.cdr_window.from ? status.cdr_window.from.slice(0, 10) : '',
     cdr_days: status.cdr_window.days,
     cdr_pages: status.counts.cdr_pages,
+    cdr_fetched: status.counts.cdr_fetched,
+    incremental: status.cdr_window.incremental ? 'true' : 'false',
     sessions_30d: recent.length,
     kwh_30d: Math.round(recent.reduce((sum, c) => sum + (c.energy_kwh || 0), 0) * 10) / 10,
   };
@@ -134,23 +163,29 @@ async function main() {
   console.log(`Connected: OCPI ${discovery.version}, modules: ${Object.keys(discovery.endpoints).join(', ')}`);
 
   const generator = config.demo ? 'demo' : inGitHubActions ? 'github-actions' : 'local';
+  const base = await loadBase();
   let snapshot;
   let dataError = null;
   try {
-    snapshot = await buildSnapshot({ client, cdrDays: config.cdrDays, generator });
+    snapshot = await buildSnapshot({ client, generator, base, historyFrom: config.historyFrom });
   } catch (err) {
     // A key that opens versions but not the data modules still gets a
     // published site: the Connection tab can then say why, and the static
     // OCPI files under /ocpi stay online for the credentials handshake.
     if (!(err instanceof OcpiError) || err.details.code !== 'UNAUTHORIZED') throw err;
     dataError = err.toJSON();
-    snapshot = buildEmptySnapshot({ client, discovery, dataError, cdrDays: config.cdrDays, generator });
+    snapshot = buildEmptySnapshot({ client, discovery, dataError, generator });
   }
   writeSite(snapshot);
 
   const info = describe(snapshot);
   const size = fs.statSync(path.join(config.outDir, 'data', 'snapshot.json')).size;
   console.log(`Snapshot written to ${config.outDir} (${Math.round(size / 1024)} kB) in ${Date.now() - startedAt} ms`);
+  if (!dataError) {
+    console.log(snapshot.status.cdr_window.incremental
+      ? `  extended the previous snapshot: ${info.cdr_fetched} record(s) changed since ${snapshot.status.cdr_window.fetched_from}, ${info.cdr_pages} page(s) fetched`
+      : `  full fetch: ${info.cdr_fetched} records in ${info.cdr_pages} page(s)`);
+  }
 
   if (dataError) {
     const explanation = explain('module_unauthorized', dataError);
@@ -160,7 +195,7 @@ async function main() {
     return;
   }
 
-  console.log(`  ${info.evses} charging points, ${info.cdr_count} charge records over ${info.cdr_days} days (${info.cdr_pages} pages), ${info.sessions_30d} sessions / ${info.kwh_30d} kWh in the last 30 days`);
+  console.log(`  ${info.evses} charging points, ${info.cdr_count} charge records since ${info.cdr_since}, ${info.sessions_30d} sessions / ${info.kwh_30d} kWh in the last 30 days`);
   setOutputs({ result: 'ok', ...info });
   addSummary([
     '### Snapshot built',
@@ -170,7 +205,7 @@ async function main() {
     `| Generated | ${info.generated_at} |`,
     `| OCPI | ${info.ocpi_version} (${info.modules}) |`,
     `| Charging points | ${info.evses} (${info.evses_charging} charging at snapshot time) |`,
-    `| Charge records | ${info.cdr_count} over ${info.cdr_days} days |`,
+    `| Charge records | ${info.cdr_count} since ${info.cdr_since} (${info.incremental === 'true' ? `${info.cdr_fetched} changed since the previous snapshot` : `full fetch, ${info.cdr_pages} pages`}) |`,
     `| Last 30 days | ${info.sessions_30d} sessions, ${info.kwh_30d} kWh |`,
   ].join('\n'));
 }

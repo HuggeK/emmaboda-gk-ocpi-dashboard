@@ -66,8 +66,12 @@ workflow in `.github/workflows/snapshot-pages.yml`. Each run:
    `SECRET_KEY`. The key expires after 7 days without use, so this is also
    what keeps it alive.
 2. Builds the site with `scripts/build-snapshot.js`: a copy of `public/` plus
-   `data/snapshot.json` holding locations, live status and the charge records
-   of the last 400 days (so the "This year" range is always complete).
+   `data/snapshot.json` holding locations, live status and every charge
+   record since the chargers went live (June 2024). To spare ChargeNode's
+   servers, a run first downloads the previously published snapshot and asks
+   ChargeNode only for the records changed since it was built (two days of
+   overlap catches late corrections), so an hourly run makes about five
+   requests. The 03:xx UTC run and manual runs refetch everything.
 3. Deploys the result to GitHub Pages (Pages source: GitHub Actions).
 4. Tracks the outcome on the issue labelled `ocpi-key-heartbeat` (created on
    the first run and assigned to the repository owner). The status line in
@@ -154,10 +158,14 @@ $env:OCPI_TOKEN = '<key>'; npm start
 ### Building the static site locally
 
 ```powershell
-npm run build          # real data with OCPI_TOKEN from .env -> dist/
+npm run build          # real data with OCPI_TOKEN from .env -> dist/ (full history)
 npm run build:demo     # invented data, no token needed
 python -m http.server 8080 -d dist   # then open http://127.0.0.1:8080/
 ```
+
+`npm run build -- --base-url https://huggek.github.io/emmaboda-gk-ocpi-dashboard/data/snapshot.json`
+extends the published snapshot the way the workflow does; `--full` forces a
+complete refetch and `--history-from 2025-01-01` limits a full fetch.
 
 `dist/` is git-ignored and is wiped on every build. Serve it over HTTP; opened
 straight from disk the browser refuses to load `data/snapshot.json`.

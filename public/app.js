@@ -6,6 +6,8 @@ const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selec
 
 const LIVE_REFRESH_MS = 30_000;
 const DAY_MS = 86_400_000;
+// The chargers went live in June 2024; "All" ranges start here.
+const HISTORY_START = new Date(2024, 5, 1);
 
 const state = {
   status: null,
@@ -370,6 +372,7 @@ const PRESETS = [
   { key: '90d', label: '90 days' },
   { key: 'mtd', label: 'This month' },
   { key: 'ytd', label: 'This year' },
+  { key: 'all', label: 'All' },
   { key: 'custom', label: 'Custom' },
 ];
 
@@ -384,6 +387,7 @@ function presetRange(preset) {
     case '90d': return { from: new Date(startOfToday.getTime() - 89 * DAY_MS), to };
     case 'mtd': return { from: new Date(now.getFullYear(), now.getMonth(), 1), to };
     case 'ytd': return { from: new Date(now.getFullYear(), 0, 1), to };
+    case 'all': return { from: HISTORY_START, to };
     case 'custom': {
       const from = state.records.customFrom ? new Date(`${state.records.customFrom}T00:00:00`) : new Date(startOfToday.getTime() - 29 * DAY_MS);
       const end = state.records.customTo ? new Date(`${state.records.customTo}T00:00:00`) : startOfToday;
@@ -660,7 +664,7 @@ const ANALYSIS_PRESETS = [
   { key: '90d', label: '90 days' },
   { key: 'ytd', label: 'This year' },
   { key: '12m', label: '12 months' },
-  { key: 'all', label: 'All (400 days)' },
+  { key: 'all', label: 'All' },
 ];
 
 function analysisRange(preset) {
@@ -671,7 +675,7 @@ function analysisRange(preset) {
   switch (preset) {
     case '90d': return { from: new Date(startOfToday.getTime() - 89 * DAY_MS), to };
     case 'ytd': return { from: new Date(now.getFullYear(), 0, 1), to };
-    case 'all': return { from: new Date(startOfToday.getTime() - 399 * DAY_MS), to };
+    case 'all': return { from: HISTORY_START, to };
     default: {
       const from = new Date(startOfToday);
       from.setFullYear(from.getFullYear() - 1);
@@ -1050,7 +1054,7 @@ async function renderConnection(retry = false) {
         <dt>OCPI version</dt><dd>${d ? `${esc(d.version)} (offered: ${(d.availableVersions || []).map(esc).join(', ')})` : '–'}</dd>
         <dt>Discovered</dt><dd>${d?.discoveredAt ? fmtDateTime(d.discoveredAt) : '–'}</dd>
         ${s.mode === 'snapshot'
-          ? `<dt>Records window</dt><dd>${s.data_error ? 'no data in this snapshot' : `${fmtDate(s.cdr_window.from)} – ${fmtDate(s.generated_at)} (${s.cdr_window.days} days, ${fmtNum(s.counts?.cdrs, 0)} records)`}</dd>`
+          ? `<dt>Records</dt><dd>${s.data_error ? 'no data in this snapshot' : `${fmtNum(s.counts?.cdrs, 0)} records since ${fmtDate(s.cdr_window.from)}${s.cdr_window.incremental ? `; this build fetched the ${fmtNum(s.cdr_window.fetched, 0)} changed since the previous snapshot` : '; full fetch'}`}</dd>`
           : `<dt>Local server</dt><dd>Node ${esc(s.server?.node || '')} on port ${esc(s.server?.port || '')}, started ${s.server?.startedAt ? fmtDateTime(s.server.startedAt) : '–'}</dd>`}
       </dl>
     </div>

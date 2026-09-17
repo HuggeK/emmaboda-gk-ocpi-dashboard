@@ -108,7 +108,9 @@ async function api(path) {
 function errorHtml(err) {
   const code = err.details?.code;
   const hint = code === 'UNAUTHORIZED'
-    ? 'ChargeNode rejected the OCPI token. Open the <a href="#connection">Connection</a> tab for the exact responses and what to ask ChargeNode.'
+    ? (state.snapshotMode
+      ? 'ChargeNode accepted the OCPI key but refused the data modules when this snapshot was built. The <a href="#connection">Connection</a> tab explains what to ask ChargeNode.'
+      : 'ChargeNode rejected the OCPI token. Open the <a href="#connection">Connection</a> tab for the exact responses and what to ask ChargeNode.')
     : code === 'MODULE_MISSING'
       ? 'This OCPI server does not offer the module needed for this view.'
       : code === 'SNAPSHOT_MISSING'
@@ -143,8 +145,14 @@ function snapshotApi(path) {
   }
   const [route, queryString] = path.split('?');
   const query = new URLSearchParams(queryString || '');
+  if (route === '/api/status') return { ...snapshot.status, connected: true, lastError: snapshot.status.data_error || null };
+  if (snapshot.status.data_error) {
+    // Built while ChargeNode refused the data modules: every data view shows why.
+    const err = new Error(snapshot.status.data_error.message || 'ChargeNode refused the data modules');
+    err.details = snapshot.status.data_error;
+    throw err;
+  }
   switch (route) {
-    case '/api/status': return { ...snapshot.status, connected: true, lastError: null };
     case '/api/locations': return { items: snapshot.locations };
     case '/api/live': return snapshot.live;
     case '/api/cdrs': return { ...snapshot.cdrs, date_from: query.get('date_from') || snapshot.cdrs.date_from, date_to: query.get('date_to') || null };
@@ -191,8 +199,8 @@ function paintIndicator() {
     dot.dataset.state = 'demo';
     text.textContent = 'Demo data';
   } else if (s.mode === 'snapshot') {
-    dot.dataset.state = 'snapshot';
-    text.textContent = `Snapshot · ${fmtRelative(s.generated_at)}`;
+    dot.dataset.state = s.data_error ? 'error' : 'snapshot';
+    text.textContent = s.data_error ? 'Snapshot · data refused' : `Snapshot · ${fmtRelative(s.generated_at)}`;
   } else if (state.snapshotMode) {
     dot.dataset.state = 'error';
     text.textContent = 'Snapshot unavailable';
@@ -684,13 +692,15 @@ async function renderConnection(retry = false) {
     ? '<div class="notice warn"><h3>Demo mode</h3>The server was started with <code>--demo</code> (or <code>OCPI_DEMO=1</code>). All numbers are generated, not from ChargeNode.</div>'
     : s.mode === 'snapshot' && s.generator === 'demo'
       ? `<div class="notice warn"><h3>Demo snapshot</h3>Generated ${fmtDateTime(s.generated_at)} with <code>npm run build:demo</code>. All numbers are invented, not from ChargeNode.</div>`
-      : s.mode === 'snapshot'
-        ? `<div class="notice"><h3><span class="ok">Snapshot</span></h3>Generated ${fmtDateTime(s.generated_at)} (${fmtRelative(s.generated_at)}) by ${esc(generatorLabel)}. ChargeNode accepted the OCPI key; OCPI ${esc(d.version)}, modules: ${Object.keys(d.endpoints).map(esc).join(', ')}.</div>`
-        : s.connected
-          ? `<div class="notice"><h3><span class="ok">Connected</span></h3>ChargeNode accepted the token. OCPI ${esc(d.version)}, modules: ${Object.keys(d.endpoints).map(esc).join(', ')}.</div>`
-          : `<div class="notice error"><h3><span class="bad">Not connected</span></h3>${esc(err?.message || 'Unknown error')}</div>`;
+      : s.mode === 'snapshot' && s.data_error
+        ? `<div class="notice error"><h3><span class="bad">Snapshot without data</span></h3>Built ${fmtDateTime(s.generated_at)} (${fmtRelative(s.generated_at)}) by ${esc(generatorLabel)}. ChargeNode accepted the OCPI key on the versions and credentials endpoints (OCPI ${esc(d.version)}) but answered HTTP ${esc(s.data_error.httpStatus || 401)} on <span class="mono">${esc(s.data_error.url || 'the data modules')}</span>. That is how an OCPI registration token ("token A") behaves before the credentials handshake: ask ChargeNode for a key with direct read access to the CPO modules, or to complete the registration.</div>`
+        : s.mode === 'snapshot'
+          ? `<div class="notice"><h3><span class="ok">Snapshot</span></h3>Generated ${fmtDateTime(s.generated_at)} (${fmtRelative(s.generated_at)}) by ${esc(generatorLabel)}. ChargeNode accepted the OCPI key; OCPI ${esc(d.version)}, modules: ${Object.keys(d.endpoints).map(esc).join(', ')}.</div>`
+          : s.connected
+            ? `<div class="notice"><h3><span class="ok">Connected</span></h3>ChargeNode accepted the token. OCPI ${esc(d.version)}, modules: ${Object.keys(d.endpoints).map(esc).join(', ')}.</div>`
+            : `<div class="notice error"><h3><span class="bad">Not connected</span></h3>${esc(err?.message || 'Unknown error')}</div>`;
 
-  const help = err?.code === 'UNAUTHORIZED' ? `
+  const help = err?.code === 'UNAUTHORIZED' && !state.snapshotMode ? `
     <div class="card">
       <div class="card-head"><h3>What HTTP 401 means here</h3></div>
       <p>The versions endpoint is the first call in every OCPI integration and it is protected by the token ChargeNode issued. A 401 with an empty body means the server does not recognise the token, in any encoding. Things to ask ChargeNode:</p>
@@ -719,7 +729,7 @@ async function renderConnection(retry = false) {
         <dt>OCPI version</dt><dd>${d ? `${esc(d.version)} (offered: ${(d.availableVersions || []).map(esc).join(', ')})` : '–'}</dd>
         <dt>Discovered</dt><dd>${d?.discoveredAt ? fmtDateTime(d.discoveredAt) : '–'}</dd>
         ${s.mode === 'snapshot'
-          ? `<dt>Records window</dt><dd>${fmtDate(s.cdr_window.from)} – ${fmtDate(s.generated_at)} (${s.cdr_window.days} days, ${fmtNum(s.counts?.cdrs, 0)} records)</dd>`
+          ? `<dt>Records window</dt><dd>${s.data_error ? 'no data in this snapshot' : `${fmtDate(s.cdr_window.from)} – ${fmtDate(s.generated_at)} (${s.cdr_window.days} days, ${fmtNum(s.counts?.cdrs, 0)} records)`}</dd>`
           : `<dt>Local server</dt><dd>Node ${esc(s.server?.node || '')} on port ${esc(s.server?.port || '')}, started ${s.server?.startedAt ? fmtDateTime(s.server.startedAt) : '–'}</dd>`}
       </dl>
     </div>

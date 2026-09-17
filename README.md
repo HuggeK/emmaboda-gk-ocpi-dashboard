@@ -202,6 +202,15 @@ it shows and how it is computed:
   multiplied by the tariff (default 120 kr/kW) gives what the chargers alone
   would cost in effektavgift. Hours are clock hours, which is how grid
   companies bill.
+- **Revenue and coverage.** Next to each month's peak: the charging revenue
+  earned in that peak hour, the revenue of the whole month, and whether the
+  month's revenue covered the effektavgift. Revenue is the charged amount
+  incl. VAT from the records, before any ChargeNode fee; an hour's share
+  follows the energy delivered in it under the model.
+- **"Car charges at"** is the power one car is assumed to draw while it is
+  actually charging (11 kW for a three-phase 16 A car, 7.4 kW single-phase,
+  22 kW three-phase 32 A). It decides how long each session's energy took to
+  deliver, and therefore how much overlaps in any hour.
 
 Everything on the tab is **chargers only**. The real effektavgift is billed
 on the whole subscription's highest hourly average, so the club's other loads

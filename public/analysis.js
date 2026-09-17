@@ -76,39 +76,65 @@ export function hoursByConcurrency(segments, maxCount = DEFAULT_OPTIONS.chargers
   return hours;
 }
 
-// Map of hour start (ms) -> { kw, rawKw, sessions }. kw is the average power
-// over that clock hour (kWh delivered in the hour), capped at capKw when set.
+// What the session was charged for: the amount incl. VAT when ChargeNode gives
+// it, otherwise excl. VAT. This is before any ChargeNode fee.
+export const revenueOf = (record) => Number(record.cost_incl_vat ?? record.cost_excl_vat) || 0;
+
+// Map of hour start (ms) -> { kw, rawKw, sessions, revenue }. kw is the
+// average power over that clock hour (kWh delivered in the hour), capped at
+// capKw when set. revenue is each session's charged amount, allocated to the
+// hours in proportion to the energy delivered in them.
 export function hourlyProfile(records, options = {}) {
   const capKw = options.capKw > 0 ? options.capKw : Infinity;
   const buckets = new Map();
   for (const record of records) {
     const w = chargingWindow(record, options);
     if (!w) continue;
+    const kwh = Number(record.energy_kwh) || 0;
+    const revenue = revenueOf(record);
     for (let t = floorHour(w.start); t < w.end; t += HOUR_MS) {
       const overlap = Math.min(t + HOUR_MS, w.end) - Math.max(t, w.start);
       if (overlap <= 0) continue;
-      const bucket = buckets.get(t) || { kwh: 0, sessions: new Set() };
-      bucket.kwh += (w.kw * overlap) / HOUR_MS;
+      const bucket = buckets.get(t) || { kwh: 0, revenue: 0, sessions: new Set() };
+      const hourKwh = (w.kw * overlap) / HOUR_MS;
+      bucket.kwh += hourKwh;
+      bucket.revenue += kwh > 0 ? (revenue * hourKwh) / kwh : 0;
       bucket.sessions.add(record.id ?? record);
       buckets.set(t, bucket);
     }
   }
   const profile = new Map();
   for (const [t, b] of [...buckets.entries()].sort((a, c) => a[0] - c[0])) {
-    profile.set(t, { kw: Math.min(b.kwh, capKw), rawKw: b.kwh, sessions: b.sessions.size });
+    profile.set(t, { kw: Math.min(b.kwh, capKw), rawKw: b.kwh, sessions: b.sessions.size, revenue: b.revenue });
   }
   return profile;
 }
 
-export function monthlyPeaks(profile, { krPerKw = DEFAULT_OPTIONS.krPerKw, range = null, now = Date.now() } = {}) {
+// Map of month key -> charged amount of the sessions that started in it.
+export function revenueByMonth(records) {
+  const months = new Map();
+  for (const record of records) {
+    const start = Date.parse(record.start || '');
+    if (!Number.isFinite(start)) continue;
+    const key = monthKey(start);
+    months.set(key, (months.get(key) || 0) + revenueOf(record));
+  }
+  return months;
+}
+
+// One row per month: the peak hour, what it costs at the tariff, the revenue
+// earned in that hour and in the whole month, and whether the month's charging
+// revenue covered the effektavgift.
+export function monthlyPeaks(profile, { krPerKw = DEFAULT_OPTIONS.krPerKw, range = null, now = Date.now(), revenue = null } = {}) {
   const months = new Map();
   for (const [t, h] of profile) {
     const key = monthKey(t);
-    const m = months.get(key) || { month: key, peakKw: 0, at: null, sessions: 0 };
+    const m = months.get(key) || { month: key, peakKw: 0, at: null, sessions: 0, spikeRevenue: 0 };
     if (h.kw > m.peakKw) {
       m.peakKw = h.kw;
       m.at = t;
       m.sessions = h.sessions;
+      m.spikeRevenue = h.revenue || 0;
     }
     months.set(key, m);
   }
@@ -120,7 +146,10 @@ export function monthlyPeaks(profile, { krPerKw = DEFAULT_OPTIONS.krPerKw, range
       const monthStart = new Date(year, month - 1, 1).getTime();
       const monthEnd = new Date(year, month, 1).getTime();
       const partial = (range ? monthStart < range.from : false) || monthEnd > limit;
-      return { ...m, cost: m.peakKw * krPerKw, partial };
+      const cost = m.peakKw * krPerKw;
+      const monthRevenue = revenue?.get(m.month) || 0;
+      const net = monthRevenue - cost;
+      return { ...m, cost, partial, monthRevenue, net, covered: net >= 0 };
     });
 }
 
@@ -165,13 +194,15 @@ export function analyze(records, range, options = {}) {
   const chargingSegments = concurrencySegments(inRange.map((r) => chargingWindow(r, o)));
   const profile = hourlyProfile(inRange, o);
   const floor = hourlyProfile(inRange, { ...o, model: 'even' });
+  const revenue = revenueByMonth(inRange);
   return {
     records: inRange.length,
+    revenue: [...revenue.values()].reduce((sum, v) => sum + v, 0),
     plugged: { peak: peakConcurrency(pluggedSegments), hours: hoursByConcurrency(pluggedSegments, o.chargers) },
     charging: { peak: peakConcurrency(chargingSegments), hours: hoursByConcurrency(chargingSegments, o.chargers) },
     profile,
-    months: monthlyPeaks(profile, { krPerKw: o.krPerKw, range, now }),
-    floorMonths: monthlyPeaks(floor, { krPerKw: o.krPerKw, range, now }),
+    months: monthlyPeaks(profile, { krPerKw: o.krPerKw, range, now, revenue }),
+    floorMonths: monthlyPeaks(floor, { krPerKw: o.krPerKw, range, now, revenue }),
     top: topHours(profile),
     peakHour: topHours(profile, 1)[0] || null,
     floorPeakHour: topHours(floor, 1)[0] || null,

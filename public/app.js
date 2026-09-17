@@ -49,6 +49,9 @@ function fmtMoney(value, currency) {
     return `${fmtNum(value, 2)} ${currency || ''}`.trim();
   }
 }
+function fmtSigned(value, currency) {
+  return `${value < 0 ? '−' : '+'}${fmtMoney(Math.abs(value), currency)}`;
+}
 function fmtDateTime(iso) {
   if (!iso) return '–';
   return new Date(iso).toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
@@ -702,9 +705,9 @@ async function renderAnalysis() {
     <div class="filters" id="analysis-filters">
       ${ANALYSIS_PRESETS.map((p) => `<button class="chip ${p.key === a.preset ? 'active' : ''}" data-preset="${p.key}">${p.label}</button>`).join('')}
       <span class="custom">
-        <label>Per car <input type="number" id="analysis-rate" value="${o.rateKw}" min="1" max="22" step="0.1"> kW</label>
-        <label>Cap <input type="number" id="analysis-cap" value="${o.capKw}" min="0" step="0.5"> kW</label>
-        <label>Tariff <input type="number" id="analysis-kr" value="${o.krPerKw}" min="0" step="1"> kr/kW</label>
+        <label title="Power one car is assumed to draw while it is actually charging. 11 kW is a three-phase 16 A car, 7.4 kW single-phase, 22 kW three-phase 32 A. ChargeNode only reports energy totals, so this decides how long each session's energy took to deliver.">Car charges at <input type="number" id="analysis-rate" value="${o.rateKw}" min="1" max="22" step="0.1"> kW</label>
+        <label title="ChargeNode's group limit for all chargers together (63 A is 43.5 kW). Hours are capped here.">Cap <input type="number" id="analysis-cap" value="${o.capKw}" min="0" step="0.5"> kW</label>
+        <label title="What the grid company charges per kW of the month's highest hourly average.">Tariff <input type="number" id="analysis-kr" value="${o.krPerKw}" min="0" step="1"> kr/kW</label>
         <label><input type="checkbox" id="analysis-even" ${o.model === 'even' ? 'checked' : ''}> Spread evenly (floor)</label>
         <button id="analysis-apply" class="primary">Apply</button>
       </span>
@@ -779,7 +782,7 @@ function analysisHtml(result, range, options, chargers) {
       label: 'Effektavgift, chargers alone',
       value: billing ? `${fmtMoney(billing.cost, 'SEK')}<small>per month</small>` : '–',
       hint: billing
-        ? `${monthLabel(billing.month)}${billing.partial ? ' (partial month)' : ''}: ${fmtNum(billing.peakKw, 1)} kW × ${fmtNum(options.krPerKw, 0)} kr/kW${averageCost !== null ? ` · full months average ${fmtMoney(averageCost, 'SEK')}` : ''}`
+        ? `${monthLabel(billing.month)}${billing.partial ? ' (partial month)' : ''}: ${fmtNum(billing.peakKw, 1)} kW × ${fmtNum(options.krPerKw, 0)} kr/kW · charging revenue ${fmtMoney(billing.monthRevenue, 'SEK')}, ${billing.covered ? 'covered' : 'not covered'} (${fmtSigned(billing.net, 'SEK')})${averageCost !== null ? ` · full months average ${fmtMoney(averageCost, 'SEK')}` : ''}`
         : 'No months in this range',
     },
   ];
@@ -798,25 +801,26 @@ function analysisHtml(result, range, options, chargers) {
     <div class="grid grid-tiles">
       ${tiles.map((t) => `<div class="card tile"><span class="label">${esc(t.label)}</span><span class="value">${t.value}</span><span class="hint">${esc(t.hint)}</span></div>`).join('')}
     </div>
-    <div class="subtle">Model: ChargeNode reports one energy total per session, not a power curve. Figures assume ${modelLabel}${capLabel}. Hours are clock hours, as the tariff counts them. Plugged-in time comes straight from the records; “charging” is the estimate. ${result.records} sessions, ${fmtNum(pluggedTotal, 0)} h plugged in.</div>
+    <div class="subtle">Model: ChargeNode reports one energy total per session, not a power curve. Figures assume ${modelLabel}${capLabel}. Hours are clock hours, as the tariff counts them. Plugged-in time comes straight from the records; “charging” is the estimate. Revenue is the charged amount incl. VAT from the records, before any ChargeNode fee; an hour’s share follows the energy delivered in it. ${result.records} sessions, ${fmtNum(pluggedTotal, 0)} h plugged in, ${fmtMoney(result.revenue, 'SEK')} charged in total.</div>
     <div class="card" id="analysis-heatmap-card" data-view="chart">
       <div class="card-head"><h3>Busy hours: average charger power by weekday and hour (kW)</h3><span class="subtle">${fmtDate(range.from)} – ${fmtDate(range.to.getTime() - DAY_MS)}</span><span class="spacer"></span><button id="analysis-heatmap-toggle">Show table</button></div>
       <div class="heatmap" id="analysis-heatmap"></div>
       <div class="table-wrap heatmap-table">${heatmapTable(result.matrix)}</div>
     </div>
     <div class="card">
-      <div class="card-head"><h3>Highest hourly average per month (kW)</h3><span class="subtle">lighter bars are partial months</span></div>
+      <div class="card-head"><h3>Highest hourly average per month (kW)</h3><span class="subtle">lighter bars are partial months · the table compares each peak with the charging revenue it earned</span></div>
       <div class="chart" id="analysis-months"></div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Month</th><th class="num">Peak hour kW</th><th class="num">Floor kW</th><th>When</th><th class="num">Cars</th><th class="num">× ${fmtNum(options.krPerKw, 0)} kr/kW</th></tr></thead>
+        <thead><tr><th>Month</th><th class="num">Peak hour kW</th><th>When</th><th class="num">Effektavgift at ${fmtNum(options.krPerKw, 0)} kr/kW</th><th class="num">Revenue that hour</th><th class="num">Revenue that month</th><th class="num">Covered?</th></tr></thead>
         <tbody>${months.map((m) => `<tr>
           <td>${esc(monthLabel(m.month))}${m.partial ? ' <span class="subtle">(partial)</span>' : ''}</td>
-          <td class="num">${fmtNum(m.peakKw, 1)}</td>
-          <td class="num">${fmtNum(floorByMonth.get(m.month)?.peakKw ?? 0, 1)}</td>
-          <td>${m.at !== null ? fmtDateTime(m.at) : '–'}</td>
-          <td class="num">${m.sessions}</td>
+          <td class="num">${fmtNum(m.peakKw, 1)} <span class="subtle">floor ${fmtNum(floorByMonth.get(m.month)?.peakKw ?? 0, 1)}</span></td>
+          <td>${m.at !== null ? `${fmtDateTime(m.at)} · ${m.sessions} car${m.sessions === 1 ? '' : 's'}` : '–'}</td>
           <td class="num">${fmtMoney(m.cost, 'SEK')}</td>
-        </tr>`).join('') || '<tr><td colspan="6" class="empty">No charging in this range</td></tr>'}</tbody>
+          <td class="num">${fmtMoney(m.spikeRevenue, 'SEK')}</td>
+          <td class="num">${fmtMoney(m.monthRevenue, 'SEK')}</td>
+          <td class="num"><span class="${m.covered ? 'ok' : 'bad'}">${m.covered ? 'covered' : 'not covered'}</span> ${fmtSigned(m.net, 'SEK')}</td>
+        </tr>`).join('') || '<tr><td colspan="7" class="empty">No charging in this range</td></tr>'}</tbody>
       </table></div>
     </div>
     <div class="grid grid-analysis">
@@ -830,8 +834,8 @@ function analysisHtml(result, range, options, chargers) {
       <div class="card">
         <div class="card-head"><h3>Top hours</h3><span class="subtle">highest estimated charger power</span></div>
         <div class="table-wrap"><table>
-          <thead><tr><th>Hour</th><th class="num">kW</th><th class="num">Cars</th></tr></thead>
-          <tbody>${top.map((h) => `<tr><td>${fmtDateTime(h.at)}</td><td class="num">${fmtNum(h.kw, 1)}</td><td class="num">${h.sessions}</td></tr>`).join('') || '<tr><td colspan="3" class="empty">No charging in this range</td></tr>'}</tbody>
+          <thead><tr><th>Hour</th><th class="num">kW</th><th class="num">Cars</th><th class="num">Revenue that hour</th><th class="num">Cost if it sets the month’s peak</th></tr></thead>
+          <tbody>${top.map((h) => `<tr><td>${fmtDateTime(h.at)}</td><td class="num">${fmtNum(h.kw, 1)}</td><td class="num">${h.sessions}</td><td class="num">${fmtMoney(h.revenue, 'SEK')}</td><td class="num">${fmtMoney(h.kw * options.krPerKw, 'SEK')}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">No charging in this range</td></tr>'}</tbody>
         </table></div>
       </div>
     </div>`;
@@ -945,7 +949,7 @@ function drawMonthlyChart(container, months, options) {
       return;
     }
     const p = points[Number(g.dataset.index)];
-    tooltip.innerHTML = `<strong>${fmtNum(p.peakKw, 1)} kW</strong>${esc(monthLabel(p.month))}${p.partial ? ' (partial)' : ''} · ${p.at !== null ? fmtDateTime(p.at) : '–'} · ${p.sessions} car${p.sessions === 1 ? '' : 's'} · ${fmtMoney(p.cost, 'SEK')}`;
+    tooltip.innerHTML = `<strong>${fmtNum(p.peakKw, 1)} kW</strong>${esc(monthLabel(p.month))}${p.partial ? ' (partial)' : ''} · ${p.at !== null ? fmtDateTime(p.at) : '–'} · ${p.sessions} car${p.sessions === 1 ? '' : 's'} · effektavgift ${fmtMoney(p.cost, 'SEK')} · revenue ${fmtMoney(p.monthRevenue, 'SEK')} (${p.covered ? 'covered' : 'not covered'})`;
     tooltip.hidden = false;
     tooltip.style.left = `${Math.min(event.clientX + 14, window.innerWidth - 240)}px`;
     tooltip.style.top = `${event.clientY + 14}px`;

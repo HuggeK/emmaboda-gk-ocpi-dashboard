@@ -11,12 +11,14 @@ import {
   hoursByConcurrency,
   monthlyPeaks,
   peakConcurrency,
+  revenueByMonth,
   weekdayHourMatrix,
 } from '../public/analysis.js';
 
 // Mid-day UTC timestamps keep weekday and month the same in every time zone.
 const T0 = Date.parse('2026-06-10T10:30:00Z'); // a Wednesday
-const record = (id, startMs, hours, kwh) => ({ id, start: new Date(startMs).toISOString(), end: new Date(startMs + hours * HOUR_MS).toISOString(), energy_kwh: kwh });
+// Every test record is charged 2 kr per kWh incl. VAT.
+const record = (id, startMs, hours, kwh) => ({ id, start: new Date(startMs).toISOString(), end: new Date(startMs + hours * HOUR_MS).toISOString(), energy_kwh: kwh, cost_incl_vat: kwh * 2, cost_excl_vat: kwh * 1.6 });
 
 test('chargingWindow: front-loaded charges at the rate until the energy is delivered, even spreads it', () => {
   const r = record('a', T0, 4, 22);
@@ -61,6 +63,10 @@ test('hourlyProfile: clock-hour buckets, session counts and the cap', () => {
   assert.equal(at(12).kw, 5.5);
   assert.equal(at(13), undefined);
   assert.equal(at(11).sessions, 1);
+  // 44 kr for 22 kWh, allocated by the energy delivered in each hour.
+  assert.equal(at(10).revenue, 11);
+  assert.equal(at(11).revenue, 22);
+  assert.equal(at(12).revenue, 11);
   const capped = hourlyProfile([r, record('b', T0, 4, 22)], { model: 'front', rateKw: 11, capKw: 15 });
   assert.equal(capped.get(Date.parse('2026-06-10T11:00:00Z')).kw, 15);
   assert.equal(capped.get(Date.parse('2026-06-10T11:00:00Z')).rawKw, 22);
@@ -69,15 +75,22 @@ test('hourlyProfile: clock-hour buckets, session counts and the cap', () => {
 
 test('monthlyPeaks: one row per month with cost and partial flags', () => {
   const july = Date.parse('2026-07-15T10:00:00Z');
-  const profile = hourlyProfile([record('a', T0, 2, 22), record('b', july, 2, 33)], { model: 'front', rateKw: 11 });
+  const records = [record('a', T0, 2, 22), record('b', july, 2, 33)];
+  const profile = hourlyProfile(records, { model: 'front', rateKw: 11 });
   // Ranges are local midnights, as the UI builds them; months are local too.
   const range = { from: new Date(2026, 5, 1).getTime(), to: new Date(2026, 7, 1).getTime() };
-  const months = monthlyPeaks(profile, { krPerKw: 120, range, now: Date.parse('2026-07-20T00:00:00Z') });
+  const months = monthlyPeaks(profile, { krPerKw: 120, range, now: Date.parse('2026-07-20T00:00:00Z'), revenue: revenueByMonth(records) });
   assert.deepEqual(months.map((m) => m.month), ['2026-06', '2026-07']);
   assert.equal(months[0].peakKw, 11);
   assert.equal(months[0].cost, 1320);
   assert.equal(months[0].partial, false);
   assert.equal(months[1].partial, true); // July is still running at "now"
+  // Revenue: the June session earned 44 kr, 22 of them in its peak hour; 44 < 1,320 so not covered.
+  assert.equal(months[0].monthRevenue, 44);
+  assert.equal(months[0].spikeRevenue, 22);
+  assert.equal(months[0].net, 44 - 1320);
+  assert.equal(months[0].covered, false);
+  assert.equal(months[1].monthRevenue, 66);
 });
 
 test('weekdayHourMatrix averages over the days of each weekday in the range', () => {
@@ -104,4 +117,8 @@ test('analyze runs on demo data and stays within the charger count', async () =>
   assert.ok(result.peakHour.kw <= 43.5);
   assert.equal(result.matrix.cells.length, 7);
   assert.equal(result.top.length, 10);
+  assert.ok(result.revenue > 0);
+  assert.ok(result.months.every((m) => m.monthRevenue >= 0 && typeof m.covered === 'boolean' && m.spikeRevenue >= 0));
+  assert.ok(result.top.every((h) => h.revenue >= 0));
+  assert.ok(Math.abs(result.months.reduce((sum, m) => sum + m.monthRevenue, 0) - result.revenue) < 1e-6);
 });

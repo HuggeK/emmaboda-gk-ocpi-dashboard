@@ -107,6 +107,11 @@ Things to know:
   e-mail.
 - Only `main` may deploy to the `github-pages` environment, so the workflow
   cannot be tested from a branch; it runs for real once merged.
+- GitHub Pages serves every file with a 10-minute cache. The build stamps the
+  script and stylesheet URLs with a build id so a new deploy never pairs a
+  fresh page with stale scripts, but a browser that loaded the page within the
+  last 10 minutes may still show the old version until a hard refresh
+  (Ctrl+F5, or reload twice on a phone).
 
 ### Exchanging a registration key for the real key
 

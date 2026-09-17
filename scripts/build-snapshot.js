@@ -75,11 +75,24 @@ function writeSite(snapshot) {
   fs.rmSync(outDir, { recursive: true, force: true });
   fs.cpSync(PUBLIC_DIR, outDir, { recursive: true });
 
-  const indexPath = path.join(outDir, 'index.html');
-  const html = fs.readFileSync(indexPath, 'utf8');
-  const anchor = '<meta name="viewport"';
-  if (!html.includes(anchor)) throw new Error('public/index.html has no viewport meta tag to anchor the snapshot tag on');
-  fs.writeFileSync(indexPath, html.replace(anchor, `${SNAPSHOT_META}\n  ${anchor}`));
+  // GitHub Pages caches every file for 10 minutes, so a deploy could otherwise
+  // pair a fresh index.html with a stale app.js in the reader's browser. A
+  // build id on the asset URLs makes each deploy fetch its own scripts.
+  const buildId = Date.now().toString(36);
+  const rewrite = (file, replacements) => {
+    let text = fs.readFileSync(file, 'utf8');
+    for (const [from, to] of replacements) {
+      if (!text.includes(from)) throw new Error(`${path.basename(file)} no longer contains "${from}"; update writeSite() in scripts/build-snapshot.js`);
+      text = text.replace(from, to);
+    }
+    fs.writeFileSync(file, text);
+  };
+  rewrite(path.join(outDir, 'index.html'), [
+    ['<meta name="viewport"', `${SNAPSHOT_META}\n  <meta name="viewport"`],
+    ['href="styles.css"', `href="styles.css?v=${buildId}"`],
+    ['src="app.js"', `src="app.js?v=${buildId}"`],
+  ]);
+  rewrite(path.join(outDir, 'app.js'), [["from './analysis.js'", `from './analysis.js?v=${buildId}'`]]);
 
   fs.mkdirSync(path.join(outDir, 'data'), { recursive: true });
   fs.writeFileSync(path.join(outDir, 'data', 'snapshot.json'), JSON.stringify(snapshot));

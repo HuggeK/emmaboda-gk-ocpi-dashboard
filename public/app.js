@@ -9,6 +9,9 @@ const DAY_MS = 86_400_000;
 const state = {
   status: null,
   liveTimer: null,
+  snapshotMode: false, // true when served as a static site, see loadSnapshot()
+  snapshot: null,
+  snapshotError: null,
   locationLabels: new Map(), // evse uid / evse_id -> friendly label
   records: {
     preset: '30d',
@@ -91,6 +94,7 @@ function pill(bucket, rawStatus) {
 
 // ------------------------------------------------------------------- network
 async function api(path) {
+  if (state.snapshotMode) return snapshotApi(path);
   const res = await fetch(path, { headers: { Accept: 'application/json' } });
   const body = await res.json().catch(() => null);
   if (!res.ok) {
@@ -107,8 +111,55 @@ function errorHtml(err) {
     ? 'ChargeNode rejected the OCPI token. Open the <a href="#connection">Connection</a> tab for the exact responses and what to ask ChargeNode.'
     : code === 'MODULE_MISSING'
       ? 'This OCPI server does not offer the module needed for this view.'
-      : 'Check that the local server is running and see the <a href="#connection">Connection</a> tab.';
+      : code === 'SNAPSHOT_MISSING'
+        ? 'This page is a static snapshot and its data file could not be loaded. Check the latest run of the publishing workflow.'
+        : 'Check that the local server is running and see the <a href="#connection">Connection</a> tab.';
   return `<div class="notice error"><h3>Could not load data</h3><div>${esc(err.message)}</div><div class="subtle" style="margin-top:6px">${hint}</div></div>`;
+}
+
+// ------------------------------------------------------------------ snapshot
+// Published as a static site (GitHub Pages) there is no local server. The
+// build step adds <meta name="dashboard-snapshot"> to index.html, pointing at a
+// JSON file holding everything the /api routes would have answered, and the
+// same views render from that file instead.
+async function loadSnapshot(url) {
+  state.snapshotMode = true;
+  try {
+    const res = await fetch(url, { cache: 'no-cache' });
+    if (!res.ok) throw new Error(`HTTP ${res.status} loading ${url}`);
+    state.snapshot = await res.json();
+  } catch (err) {
+    state.snapshotError = err;
+  }
+  $('.footer span').textContent = 'Data via OCPI from ChargeNode. Static snapshot published by GitHub Actions; the OCPI key stays in a repository secret and never reaches the browser.';
+}
+
+function snapshotApi(path) {
+  const snapshot = state.snapshot;
+  if (!snapshot) {
+    const err = new Error(state.snapshotError?.message || 'Snapshot not loaded');
+    err.details = { code: 'SNAPSHOT_MISSING' };
+    throw err;
+  }
+  const [route, queryString] = path.split('?');
+  const query = new URLSearchParams(queryString || '');
+  switch (route) {
+    case '/api/status': return { ...snapshot.status, connected: true, lastError: null };
+    case '/api/locations': return { items: snapshot.locations };
+    case '/api/live': return snapshot.live;
+    case '/api/cdrs': return { ...snapshot.cdrs, date_from: query.get('date_from') || snapshot.cdrs.date_from, date_to: query.get('date_to') || null };
+    default: {
+      const err = new Error(`No snapshot data for ${route}`);
+      err.details = { code: 'NOT_FOUND' };
+      throw err;
+    }
+  }
+}
+
+// "Now" for date ranges: the snapshot time when viewing a snapshot, so "Today"
+// and "7 days" mean the days the data actually covers.
+function referenceTime() {
+  return state.snapshot ? new Date(state.snapshot.status.generated_at) : new Date();
 }
 
 // -------------------------------------------------------------------- router
@@ -139,6 +190,12 @@ function paintIndicator() {
   } else if (s.mode === 'demo') {
     dot.dataset.state = 'demo';
     text.textContent = 'Demo data';
+  } else if (s.mode === 'snapshot') {
+    dot.dataset.state = 'snapshot';
+    text.textContent = `Snapshot · ${fmtRelative(s.generated_at)}`;
+  } else if (state.snapshotMode) {
+    dot.dataset.state = 'error';
+    text.textContent = 'Snapshot unavailable';
   } else if (s.connected) {
     dot.dataset.state = 'ok';
     text.textContent = `Connected · OCPI ${s.discovery?.version || ''}`;
@@ -190,7 +247,7 @@ async function renderLive() {
     root.innerHTML = errorHtml(err);
     root.dataset.rendered = '';
   }
-  if (currentTab() === 'live') state.liveTimer = setTimeout(renderLive, LIVE_REFRESH_MS);
+  if (currentTab() === 'live' && !state.snapshotMode) state.liveTimer = setTimeout(renderLive, LIVE_REFRESH_MS);
 }
 
 function liveHtml(live) {
@@ -242,10 +299,12 @@ function liveHtml(live) {
 
   return `
     <div class="view-head">
-      <h2>Right now</h2>
-      <span class="subtle">Updated ${fmtTime(live.generated_at)} · auto-refreshes every ${LIVE_REFRESH_MS / 1000} s</span>
+      <h2>${state.snapshotMode ? 'At last snapshot' : 'Right now'}</h2>
+      <span class="subtle">${state.snapshotMode
+        ? `Snapshot from ${fmtDateTime(live.generated_at)} (${fmtRelative(live.generated_at)})`
+        : `Updated ${fmtTime(live.generated_at)} · auto-refreshes every ${LIVE_REFRESH_MS / 1000} s`}</span>
       <span class="spacer"></span>
-      <button id="live-refresh">Refresh now</button>
+      ${state.snapshotMode ? '' : '<button id="live-refresh">Refresh now</button>'}
     </div>
     <div class="hero">
       <div class="card">
@@ -292,7 +351,7 @@ const PRESETS = [
 ];
 
 function presetRange(preset) {
-  const now = new Date();
+  const now = referenceTime();
   const startOfToday = new Date(now);
   startOfToday.setHours(0, 0, 0, 0);
   const to = new Date(startOfToday.getTime() + DAY_MS);
@@ -320,7 +379,7 @@ async function renderRecords() {
   root.innerHTML = `
     <div class="view-head">
       <h2>Charging records</h2>
-      <span class="subtle">Charge detail records (CDRs) from ChargeNode</span>
+      <span class="subtle">Charge detail records (CDRs) from ChargeNode${state.snapshot ? ` · snapshot from ${fmtDateTime(state.snapshot.status.generated_at)}; ranges count back from that day` : ''}</span>
       <span class="spacer"></span>
       <button id="records-export" disabled>Export CSV</button>
     </div>
@@ -432,9 +491,11 @@ const RECORD_COLUMNS = [
 function bindRecordsTable(items) {
   const container = $('#records-table');
   if (!container) return;
+  // Published snapshots carry no token ids; drop the column rather than show dashes.
+  const columns = items.some((c) => c.token_uid) ? RECORD_COLUMNS : RECORD_COLUMNS.filter((c) => c.key !== 'token_uid');
   const draw = () => {
     const { key, dir } = state.records.sort;
-    const column = RECORD_COLUMNS.find((c) => c.key === key) || RECORD_COLUMNS[0];
+    const column = columns.find((c) => c.key === key) || columns[0];
     const valueOf = column.value || ((c) => c[key]);
     const sorted = [...items].sort((a, b) => {
       const va = valueOf(a);
@@ -446,8 +507,8 @@ function bindRecordsTable(items) {
       return dir === 'asc' ? cmp : -cmp;
     });
     container.innerHTML = `<table>
-      <thead><tr>${RECORD_COLUMNS.map((c) => `<th class="sortable ${c.num ? 'num' : ''}" data-key="${c.key}">${c.label}<span class="sort-mark">${c.key === key ? (dir === 'asc' ? '▲' : '▼') : ''}</span></th>`).join('')}</tr></thead>
-      <tbody>${sorted.map((c) => `<tr>${RECORD_COLUMNS.map((col) => `<td class="${col.num ? 'num' : ''}">${col.render(c)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${RECORD_COLUMNS.length}" class="empty">No charging records in this period</td></tr>`}</tbody>
+      <thead><tr>${columns.map((c) => `<th class="sortable ${c.num ? 'num' : ''}" data-key="${c.key}">${c.label}<span class="sort-mark">${c.key === key ? (dir === 'asc' ? '▲' : '▼') : ''}</span></th>`).join('')}</tr></thead>
+      <tbody>${sorted.map((c) => `<tr>${columns.map((col) => `<td class="${col.num ? 'num' : ''}">${col.render(c)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${columns.length}" class="empty">No charging records in this period</td></tr>`}</tbody>
     </table>`;
   };
   container.addEventListener('click', (event) => {
@@ -618,11 +679,16 @@ async function renderConnection(retry = false) {
   const err = s.lastError;
   const attempts = (err?.attempts || d?.attempts || []);
 
+  const generatorLabel = { 'github-actions': 'the scheduled GitHub Actions job', local: 'a local build' }[s.generator] || s.generator || 'an unknown builder';
   const verdict = s.mode === 'demo'
     ? '<div class="notice warn"><h3>Demo mode</h3>The server was started with <code>--demo</code> (or <code>OCPI_DEMO=1</code>). All numbers are generated, not from ChargeNode.</div>'
-    : s.connected
-      ? `<div class="notice"><h3><span class="ok">Connected</span></h3>ChargeNode accepted the token. OCPI ${esc(d.version)}, modules: ${Object.keys(d.endpoints).map(esc).join(', ')}.</div>`
-      : `<div class="notice error"><h3><span class="bad">Not connected</span></h3>${esc(err?.message || 'Unknown error')}</div>`;
+    : s.mode === 'snapshot' && s.generator === 'demo'
+      ? `<div class="notice warn"><h3>Demo snapshot</h3>Generated ${fmtDateTime(s.generated_at)} with <code>npm run build:demo</code>. All numbers are invented, not from ChargeNode.</div>`
+      : s.mode === 'snapshot'
+        ? `<div class="notice"><h3><span class="ok">Snapshot</span></h3>Generated ${fmtDateTime(s.generated_at)} (${fmtRelative(s.generated_at)}) by ${esc(generatorLabel)}. ChargeNode accepted the OCPI key; OCPI ${esc(d.version)}, modules: ${Object.keys(d.endpoints).map(esc).join(', ')}.</div>`
+        : s.connected
+          ? `<div class="notice"><h3><span class="ok">Connected</span></h3>ChargeNode accepted the token. OCPI ${esc(d.version)}, modules: ${Object.keys(d.endpoints).map(esc).join(', ')}.</div>`
+          : `<div class="notice error"><h3><span class="bad">Not connected</span></h3>${esc(err?.message || 'Unknown error')}</div>`;
 
   const help = err?.code === 'UNAUTHORIZED' ? `
     <div class="card">
@@ -640,7 +706,7 @@ async function renderConnection(retry = false) {
     <div class="view-head">
       <h2>Connection</h2>
       <span class="spacer"></span>
-      <button id="conn-retry" class="primary">Retry connection</button>
+      ${state.snapshotMode ? '' : '<button id="conn-retry" class="primary">Retry connection</button>'}
     </div>
     ${verdict}
     <div class="card">
@@ -648,11 +714,13 @@ async function renderConnection(retry = false) {
       <dl class="kv">
         <dt>Mode</dt><dd>${esc(s.mode)}</dd>
         <dt>Versions URL</dt><dd class="mono">${esc(s.versionsUrl || '–')}</dd>
-        <dt>Token</dt><dd class="mono">${esc(s.tokenPreview || '–')}</dd>
-        <dt>Token encoding</dt><dd>${esc(s.tokenEncoding || '–')}${d?.encoding ? ` (using: ${esc(d.encoding)})` : ''}</dd>
+        <dt>Token</dt><dd class="mono">${esc(s.tokenPreview || (s.mode === 'snapshot' ? 'kept as a GitHub Actions secret; never sent to the browser' : '–'))}</dd>
+        <dt>Token encoding</dt><dd>${esc(s.tokenEncoding || d?.encoding || '–')}${s.tokenEncoding && d?.encoding ? ` (using: ${esc(d.encoding)})` : ''}</dd>
         <dt>OCPI version</dt><dd>${d ? `${esc(d.version)} (offered: ${(d.availableVersions || []).map(esc).join(', ')})` : '–'}</dd>
         <dt>Discovered</dt><dd>${d?.discoveredAt ? fmtDateTime(d.discoveredAt) : '–'}</dd>
-        <dt>Local server</dt><dd>Node ${esc(s.server?.node || '')} on port ${esc(s.server?.port || '')}, started ${s.server?.startedAt ? fmtDateTime(s.server.startedAt) : '–'}</dd>
+        ${s.mode === 'snapshot'
+          ? `<dt>Records window</dt><dd>${fmtDate(s.cdr_window.from)} – ${fmtDate(s.generated_at)} (${s.cdr_window.days} days, ${fmtNum(s.counts?.cdrs, 0)} records)</dd>`
+          : `<dt>Local server</dt><dd>Node ${esc(s.server?.node || '')} on port ${esc(s.server?.port || '')}, started ${s.server?.startedAt ? fmtDateTime(s.server.startedAt) : '–'}</dd>`}
       </dl>
     </div>
     ${d?.endpoints ? `<div class="card"><div class="card-head"><h3>Module endpoints</h3></div><div class="table-wrap"><table><thead><tr><th>Module</th><th>URL</th></tr></thead><tbody>${Object.entries(d.endpoints).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="mono">${esc(v)}</td></tr>`).join('')}</tbody></table></div></div>` : ''}
@@ -660,9 +728,14 @@ async function renderConnection(retry = false) {
     ${err ? `<div class="card"><div class="card-head"><h3>Last error</h3></div><pre>${esc(JSON.stringify(err, null, 2))}</pre></div>` : ''}
     ${help}`;
 
-  $('#conn-retry').addEventListener('click', () => renderConnection(true));
+  $('#conn-retry')?.addEventListener('click', () => renderConnection(true));
 }
 
 // ----------------------------------------------------------------------- boot
-refreshStatus().then(loadLocationLabels);
-route();
+async function boot() {
+  const snapshotUrl = document.querySelector('meta[name="dashboard-snapshot"]')?.content;
+  if (snapshotUrl) await loadSnapshot(snapshotUrl);
+  refreshStatus().then(loadLocationLabels);
+  route();
+}
+boot();

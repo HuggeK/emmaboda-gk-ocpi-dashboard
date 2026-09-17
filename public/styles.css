@@ -113,6 +113,7 @@ input[type="date"] {
 .conn-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
 .conn-dot[data-state="ok"] { background: var(--good); }
 .conn-dot[data-state="demo"] { background: var(--warning); }
+.conn-dot[data-state="snapshot"] { background: var(--accent); }
 .conn-dot[data-state="error"] { background: var(--critical); }
 
 /* Layout */

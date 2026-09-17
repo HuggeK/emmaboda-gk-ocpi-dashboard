@@ -113,14 +113,15 @@ it on every push to `main`), then run the handshake once, from this machine:
 
 ```powershell
 npm run handshake -- --dry-run --token <registration key>   # checks both sides, changes nothing
-npm run handshake -- --token <registration key> --write-env  # the real, one-shot exchange
+npm run handshake -- --token <registration key>             # the real, one-shot exchange
 ```
 
-The script prints the new key, proves it on the locations module, and with
-`--write-env` puts it into `.env`. Then store it as the `SECRET_KEY` secret
-(see below). After a successful exchange the registration key stops working,
-so do not run it twice. Our side is registered as party `SE`/`EGK`, role
-`EMSP`, name "Emmaboda GK" (override with `OCPI_OUR_*` environment variables).
+The script prints the new key and proves it on the locations module. Store it
+as the `SECRET_KEY` secret (see below); keep it out of files on disk
+(`--write-env` exists but writes it into `.env`, which is not recommended).
+After a successful exchange the registration key stops working, so do not run
+it twice. Our side is registered as party `SE`/`EGK`, role `EMSP`, name
+"Emmaboda GK" (override with `OCPI_OUR_*` environment variables).
 
 ### Rotating the key
 
@@ -131,7 +132,12 @@ gh secret set SECRET_KEY -R HuggeK/emmaboda-gk-ocpi-dashboard   # paste the key 
 gh workflow run "Snapshot to GitHub Pages" -R HuggeK/emmaboda-gk-ocpi-dashboard
 ```
 
-Put the new key in the local `.env` too if you use `npm start`.
+For the local app, pass the key through the environment instead of writing it
+into `.env`:
+
+```powershell
+$env:OCPI_TOKEN = '<key>'; npm start
+```
 
 ### Building the static site locally
 

@@ -7,6 +7,9 @@
 node_modules/
 npm-debug.log*
 
+# Static site build output (scripts/build-snapshot.js)
+dist/
+
 # OS / editor
 .DS_Store
 Thumbs.db

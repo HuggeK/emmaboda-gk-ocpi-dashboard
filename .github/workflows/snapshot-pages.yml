@@ -1,0 +1,85 @@
+# Fetches the latest data from ChargeNode with the OCPI key, builds the static
+# dashboard and publishes it to GitHub Pages. Runs twice a week because the key
+# expires after 7 days without use: if one run is delayed or fails, the next one
+# still lands inside the week. Every run, pass or fail, is reported as a comment
+# on a tracking issue so it shows up as a notification.
+name: Snapshot to GitHub Pages
+
+on:
+  schedule:
+    - cron: '17 5 * * 1,4' # Monday and Thursday 05:17 UTC (07:17 Swedish time)
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'public/**'
+      - 'server/**'
+      - 'scripts/**'
+      - '.github/**'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  issues: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+env:
+  TZ: Europe/Stockholm
+
+jobs:
+  snapshot:
+    name: Fetch data and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build static dashboard from ChargeNode data
+        id: build
+        env:
+          OCPI_TOKEN: ${{ secrets.SECRET_KEY }}
+        run: node scripts/build-snapshot.js --out dist
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Report on the tracking issue
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          JOB_STATUS: ${{ job.status }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          DEPLOY_OUTCOME: ${{ steps.deployment.outcome }}
+          BUILD_RESULT: ${{ steps.build.outputs.result }}
+          BUILD_ERROR: ${{ steps.build.outputs.error }}
+          KEY_USED: ${{ steps.build.outputs.key_used }}
+          GENERATED_AT: ${{ steps.build.outputs.generated_at }}
+          OCPI_VERSION: ${{ steps.build.outputs.ocpi_version }}
+          EVSES: ${{ steps.build.outputs.evses }}
+          CDR_COUNT: ${{ steps.build.outputs.cdr_count }}
+          CDR_DAYS: ${{ steps.build.outputs.cdr_days }}
+          SESSIONS_30D: ${{ steps.build.outputs.sessions_30d }}
+          KWH_30D: ${{ steps.build.outputs.kwh_30d }}
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        with:
+          script: |
+            const report = require('./.github/scripts/report-run.cjs');
+            await report({ github, context, core });

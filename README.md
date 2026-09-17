@@ -14,7 +14,8 @@ the OCPI API that ChargeNode exposes for the chargers.
 Everything runs on your own computer. A tiny Node server keeps the OCPI token
 out of the browser and proxies the OCPI calls (the OCPI server does not allow
 browser calls directly). No packages are installed; only Node.js 22 or newer is
-needed.
+needed. A read-only copy is also published on GitHub Pages twice a week; see
+[Published dashboard](#published-dashboard-github-pages).
 
 ## Quick start
 
@@ -52,6 +53,68 @@ npm run check
 
 Command-line flags: `--demo`, `--check`, `--port 3001`, `--verbose` (logs every OCPI request).
 
+## Published dashboard (GitHub Pages)
+
+A read-only copy of the dashboard is published at
+<https://huggek.github.io/emmaboda-gk-ocpi-dashboard/> by the GitHub Actions
+workflow in `.github/workflows/snapshot-pages.yml`. Each run:
+
+1. Calls ChargeNode with the OCPI key stored in the repository secret
+   `SECRET_KEY`. The key expires after 7 days without use, so this is also
+   what keeps it alive.
+2. Builds the site with `scripts/build-snapshot.js`: a copy of `public/` plus
+   `data/snapshot.json` holding locations, live status and the charge records
+   of the last 400 days (so the "This year" range is always complete).
+3. Deploys the result to GitHub Pages (Pages source: GitHub Actions).
+4. Comments ✅ or ❌ on the tracking issue labelled `ocpi-key-heartbeat`
+   (created on the first run and assigned to the repository owner), so every
+   run arrives as a GitHub notification. GitHub also e-mails failed runs on
+   its own.
+
+The workflow runs Monday and Thursday at 05:17 UTC, on every push to `main`
+that touches the app, and on demand from the Actions tab (*Snapshot to GitHub
+Pages* → *Run workflow*). Two runs a week means one delayed or failed run does
+not let the key lapse.
+
+The site is public even though the repository is private, so the published
+snapshot leaves out the fields that identify who charged (`token_uid` and
+`contract_id`). Everything else is what the local app shows. In snapshot mode
+the header says "Snapshot · x ago", the Live tab does not auto-refresh, and
+the Records date ranges count back from the snapshot time instead of today.
+
+Things to know:
+
+- GitHub can delay scheduled runs by minutes to hours when the platform is
+  busy; the twice-weekly cadence absorbs that.
+- Scheduled workflows in *public* repositories are switched off after 60 days
+  without commits. This repository is private, so that rule does not apply
+  today; if it is ever made public, watch for GitHub's "workflow disabled"
+  e-mail.
+- Only `main` may deploy to the `github-pages` environment, so the workflow
+  cannot be tested from a branch; it runs for real once merged.
+
+### Rotating the key
+
+When ChargeNode sends a new key, or a run reports HTTP 401:
+
+```powershell
+gh secret set SECRET_KEY -R HuggeK/emmaboda-gk-ocpi-dashboard   # paste the key when prompted
+gh workflow run "Snapshot to GitHub Pages" -R HuggeK/emmaboda-gk-ocpi-dashboard
+```
+
+Put the new key in the local `.env` too if you use `npm start`.
+
+### Building the static site locally
+
+```powershell
+npm run build          # real data with OCPI_TOKEN from .env -> dist/
+npm run build:demo     # invented data, no token needed
+python -m http.server 8080 -d dist   # then open http://127.0.0.1:8080/
+```
+
+`dist/` is git-ignored and is wiped on every build. Serve it over HTTP; opened
+straight from disk the browser refuses to load `data/snapshot.json`.
+
 ## How it works
 
 ```
@@ -86,6 +149,17 @@ endpoint on our side, which this local app does not have, so a permanent token
 is needed instead), or whether it was already consumed. The Connection tab lists
 each request made and the status returned.
 
+**Versions OK but every module answers HTTP 401.** The key opens `/versions`,
+the version details and `/credentials`, yet `locations`, `sessions`, `cdrs` and
+`tariffs` all return 401 in every token encoding and OCPI version. That is how
+an OCPI registration token ("token A") behaves: it only allows the credentials
+handshake (`POST /credentials`), after which the CPO issues the real access
+token. The handshake requires ChargeNode to call back an OCPI versions endpoint
+on our side, which neither the local app nor the static site provides. Ask
+ChargeNode for a key with direct read access to the CPO modules, or to register
+our side with a fixed token. The scheduled workflow reports this case as
+"⚠️ Key accepted, but ChargeNode refused the data modules".
+
 **Reproduce by hand** (PowerShell):
 
 ```powershell
@@ -106,6 +180,10 @@ server/index.js        HTTP server, static files, /api routes, caching
 server/ocpi-client.js  Token auth, version discovery, pagination
 server/normalize.js    OCPI 2.1.1 / 2.2 / 2.2.1 payloads -> one flat shape
 server/live.js         "Right now" calculation from locations + sessions
+server/snapshot.js     One JSON snapshot of everything the UI shows (static site)
 server/demo-data.js    Deterministic demo data (OCPI 2.2.1 shaped)
 public/                index.html, styles.css, app.js (no build step)
+scripts/build-snapshot.js             public/ + data/snapshot.json -> dist/
+.github/workflows/snapshot-pages.yml  Twice-weekly fetch, deploy and report
+.github/scripts/report-run.cjs        Comments each run's outcome on the tracking issue
 ```

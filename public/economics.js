@@ -182,6 +182,53 @@ export function winterCeilingCheck(rows, unlimited, { ceilingKw, krPerKw, margin
   });
 }
 
+// What switching the chargers off for part of the night would have saved: per
+// month, the effektavgift their night-time charging added (the peak with it
+// minus the peak with the chargers at zero in those hours), against the
+// margin on the charging energy that would be lost. rows: splitHours() rows.
+export function nightOffCheck(rows, { from, to, krPerKw, marginPerKwh }) {
+  const night = (t) => {
+    const h = new Date(t).getHours();
+    return from > to ? h >= from || h < to : h >= from && h < to;
+  };
+  const months = new Map();
+  for (const r of rows) {
+    const key = monthKey(r.at);
+    (months.get(key) || months.set(key, []).get(key)).push(r);
+  }
+  let savedKr = 0;
+  let nightKwh = 0;
+  let totalKwh = 0;
+  const savingMonths = [];
+  for (const [month, hs] of months) {
+    const now = Math.max(...hs.map((h) => h.meterKw));
+    const off = Math.max(...hs.map((h) => (night(h.at) ? h.otherKw : h.meterKw)));
+    const saved = Math.max(0, now - off) * krPerKw;
+    savedKr += saved;
+    if (saved > 0) savingMonths.push({ month, savedKr: saved });
+    for (const h of hs) {
+      totalKwh += h.chargerKw;
+      if (night(h.at)) nightKwh += h.chargerKw;
+    }
+  }
+  const years = months.size / 12;
+  const lostMarginKr = nightKwh * marginPerKwh;
+  return {
+    from,
+    to,
+    months: months.size,
+    savedKr,
+    savedPerYear: years ? savedKr / years : 0,
+    nightKwh,
+    totalKwh,
+    nightShare: totalKwh ? nightKwh / totalKwh : 0,
+    lostMarginKr,
+    lostPerYear: years ? lostMarginKr / years : 0,
+    netPerYear: years ? (savedKr - lostMarginKr) / years : 0,
+    savingMonths,
+  };
+}
+
 // A plain verdict on the price, from the account of the last 12 months.
 export function priceAdvice(acc, { currentPrice = 5, market = MARKET_BAND, krPerKw = 120 } = {}) {
   const be = acc.effekt.measured !== null && acc.effekt.measuredMonths >= Math.min(6, acc.months) ? acc.breakEven.expected : null;

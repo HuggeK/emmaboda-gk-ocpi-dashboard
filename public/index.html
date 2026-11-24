@@ -20,12 +20,11 @@
       </span>
     </div>
     <nav class="tabs" aria-label="Views">
-      <a href="#live" data-tab="live">Live</a>
-      <a href="#records" data-tab="records">Records</a>
-      <a href="#analysis" data-tab="analysis">Analysis</a>
+      <a href="#overview" data-tab="overview">Overview</a>
       <a href="#meter" data-tab="meter">Meter</a>
+      <a href="#analysis" data-tab="analysis">Analysis</a>
       <a href="#economics" data-tab="economics">Economics</a>
-      <a href="#chargers" data-tab="chargers">Chargers</a>
+      <a href="#live" data-tab="charging">Chargers</a>
       <a href="#connection" data-tab="connection">Connection</a>
       <a href="#guide" data-tab="guide" lang="sv">Så funkar det</a>
     </nav>
@@ -36,11 +35,17 @@
   </header>
 
   <main id="app">
+    <section id="view-overview" class="view" hidden></section>
+    <section id="view-meter" class="view" hidden></section>
+    <section id="view-analysis" class="view" hidden></section>
+    <section id="view-economics" class="view" hidden></section>
+    <nav class="subtabs" id="charging-subtabs" aria-label="Chargers" hidden>
+      <a href="#live" data-tab="live">Live</a>
+      <a href="#records" data-tab="records">Records</a>
+      <a href="#chargers" data-tab="chargers">Charging points</a>
+    </nav>
     <section id="view-live" class="view" hidden></section>
     <section id="view-records" class="view" hidden></section>
-    <section id="view-analysis" class="view" hidden></section>
-    <section id="view-meter" class="view" hidden></section>
-    <section id="view-economics" class="view" hidden></section>
     <section id="view-chargers" class="view" hidden></section>
     <section id="view-connection" class="view" hidden></section>
     <section id="view-guide" class="view" lang="sv" hidden></section>

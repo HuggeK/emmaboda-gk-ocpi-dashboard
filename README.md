@@ -3,19 +3,26 @@
 A small local web app that shows what the club's EV chargers are doing, using
 the OCPI API that ChargeNode exposes for the chargers.
 
-- **Live** - power in use right now versus installed capacity, which charging
-  points are charging / available / out of service, ongoing sessions.
-- **Records** - charge detail records (CDRs): sessions, kWh, cost, time plugged
-  in, energy per day, per-charger breakdown, sortable table, CSV export.
+- **Overview** (first page) - this month's peak so far, the effektavgift this
+  year and the chargers' part of it, the limit in force, and the billed peak
+  per month.
+- **Meter** - the whole facility's measured hourly power from E.ON's grid
+  meter, split into the chargers' (estimated) part and everything else, the
+  limits in force, when the peaks happen and which loads probably cause them
+  (`public/facility.js`), monthly billed peaks, and a cost breakdown worked out
+  from the meter values. See [Grid meter (E.ON)](#grid-meter-eon).
 - **Analysis** - how often several chargers run at once, the busy hours
   (weekday × hour heatmap) and an estimate of the effektavgift the chargers
   alone would cause, computed from the charge records.
-- **Meter** - the whole facility's measured hourly power from E.ON's grid
-  meter, split into the chargers' (estimated) part and everything else, the
-  limits in force, monthly billed peaks, and a cost breakdown worked out from
-  the meter values. See [Grid meter (E.ON)](#grid-meter-eon).
-- **Chargers** - the locations, charging points (EVSEs) and connectors ChargeNode
-  publishes.
+- **Economics** - what the chargers earn and cost, the break-even price, whether
+  the winter ceiling or a night stop pays, what can be negotiated in the
+  electricity contracts (from E.ON's cost export, `public/contracts.js`, with
+  E.ON Elnät's 2027 prices) and where solar helps most.
+- **Chargers** - three sub-tabs: *Live* (power in use right now, which charging
+  points are charging / available / out of service), *Records* (charge detail
+  records: sessions, kWh, cost, time plugged in, energy per day, per-charger
+  breakdown, CSV export) and *Charging points* (the locations, EVSEs and
+  connectors ChargeNode publishes).
 - **Connection** - exactly what the OCPI server and E.ON answered, for troubleshooting.
 - **Så funkar det** - a plain-language explanation in Swedish for club members:
   where the numbers come from, why one hour can set the month's effektavgift,

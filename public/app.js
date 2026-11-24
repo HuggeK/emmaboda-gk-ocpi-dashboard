@@ -2,6 +2,7 @@
 import {
   analyze,
   hourlyProfile,
+  monthlyPeaks,
   revenueByMonth,
   LIMIT_HISTORY,
   SEASON_PLAN,
@@ -11,6 +12,7 @@ import {
   DEFAULT_OPTIONS as ANALYSIS_DEFAULTS,
 } from './analysis.js';
 import { DEFAULT_TARIFF, meterHours, splitHours, dailyPeaks, monthlyMeter, summarize, seasonalPicture } from './meter.js';
+import { DEFAULT_COSTS, MARKET_BAND, account, limitSavings, priceAdvice } from './economics.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -45,6 +47,9 @@ const state = {
     installation: 0,
     tariff: loadTariff(),
     tableView: false,
+  },
+  economics: {
+    costs: loadCosts(),
   },
   chargerCount: 0,
 };
@@ -203,7 +208,7 @@ function referenceTime() {
 }
 
 // -------------------------------------------------------------------- router
-const views = { live: renderLive, records: renderRecords, analysis: renderAnalysis, meter: renderMeter, chargers: renderChargers, connection: renderConnection, guide: renderGuide };
+const views = { live: renderLive, records: renderRecords, analysis: renderAnalysis, meter: renderMeter, economics: renderEconomics, chargers: renderChargers, connection: renderConnection, guide: renderGuide };
 
 function currentTab() {
   const hash = location.hash.replace('#', '');
@@ -1484,6 +1489,206 @@ function drawMeterMonths(container, months) {
     const m = months[i];
     return `<strong>${fmtNum(m.peakKw, 1)} kW billed peak</strong>${esc(monthLabel(m.month))}${m.partial ? ' (partial)' : ''} · ${m.peakAt !== null ? fmtDateTime(m.peakAt) : '–'}<br>chargers ${fmtNum(m.chargersAtPeakKw, 1)} kW · everything else ${fmtNum(m.otherAtPeakKw, 1)} kW<br>without the chargers the peak would have been ${fmtNum(m.peakWithoutChargersKw, 1)} kW → they added ${fmtMoney(m.chargers.effectCost, 'SEK')} effektavgift (excl. VAT)${m.limit ? `<br>Limit: ${esc(m.limit.label)}` : ''}`;
   });
+}
+
+// ------------------------------------------------------------------ economics
+// Is charging profitable, what does the system cost a year, did lowering the
+// peaks pay, and is the price right. The maths lives in economics.js.
+const COSTS_KEY = 'emgk.costs.v1';
+
+function loadCosts() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(COSTS_KEY) || 'null');
+    if (saved && typeof saved === 'object') return { ...DEFAULT_COSTS, ...saved };
+  } catch {
+    // storage blocked: defaults
+  }
+  return { ...DEFAULT_COSTS };
+}
+
+function saveCosts(costs) {
+  try {
+    localStorage.setItem(COSTS_KEY, JSON.stringify(costs));
+  } catch {
+    // not saved; applies until reload
+  }
+}
+
+function economicsPeriods(records) {
+  const ref = referenceTime();
+  const thisMonth = new Date(ref.getFullYear(), ref.getMonth(), 1);
+  const yearAgo = new Date(thisMonth);
+  yearAgo.setFullYear(yearAgo.getFullYear() - 1);
+  const periods = [{ key: 'last12', label: `Last 12 full months (${monthLabel(dayKey(yearAgo).slice(0, 7))} – ${monthLabel(dayKey(thisMonth.getTime() - DAY_MS).slice(0, 7))})`, from: yearAgo.getTime(), to: thisMonth.getTime() }];
+  const years = [...new Set(records.map((r) => new Date(r.start).getFullYear()))].sort((a, b) => b - a);
+  for (const y of years) {
+    const to = Math.min(new Date(y + 1, 0, 1).getTime(), new Date(ref.getFullYear(), ref.getMonth() + 1, 1).getTime());
+    const first = y === years.at(-1) ? Math.max(new Date(y, 0, 1).getTime(), new Date(Math.min(...records.map((r) => Date.parse(r.start)))).setDate(1)) : new Date(y, 0, 1).getTime();
+    periods.push({ key: String(y), label: `${y}${y === ref.getFullYear() ? ' so far' : ''}`, from: new Date(first).setHours(0, 0, 0, 0), to });
+  }
+  return periods;
+}
+
+async function renderEconomics() {
+  const root = $('#view-economics');
+  const o = state.analysis.options;
+  const t = state.meter.tariff;
+  const costs = state.economics.costs;
+  root.innerHTML = `
+    <div class="view-head"><h2>Economics</h2><span class="subtle">What the chargers earn and cost, what this system costs a year, whether lowering the peaks paid, and whether the price is right</span></div>
+    <div id="economics-body"><div class="loading">Calculating...</div></div>`;
+  const body = $('#economics-body');
+  let eon;
+  let records;
+  try {
+    ({ eon, records } = await loadMeterInputs());
+    if (!state.chargerCount) await loadLocationLabels();
+  } catch (err) {
+    body.innerHTML = errorHtml(err);
+    return;
+  }
+  const points = state.chargerCount || ANALYSIS_DEFAULTS.chargers;
+  const profile = hourlyProfile(records, o);
+  const chargerMonths = monthlyPeaks(profile, { ...o, krPerKw: t.krPerKw, peakCount: t.peakCount, now: referenceTime().getTime() });
+  const inst = eon?.configured ? (eon.installations || []).find((i) => i.hourly) : null;
+  let meterMonths = [];
+  let savings = [];
+  if (inst) {
+    const rows = splitHours(meterHours(inst), profile, null, o);
+    meterMonths = monthlyMeter(rows, { tariff: t, revenue: revenueByMonth(records), now: referenceTime().getTime(), capOptions: o });
+    savings = limitSavings(rows, hourlyProfile(records, { ...o, limits: 'none' }), { krPerKw: t.krPerKw });
+  }
+  const periods = economicsPeriods(records);
+  const accounts = periods.map((p) => ({ period: p, acc: account({ records, period: p, tariff: t, costs, points, chargerMonths, meterMonths }) }));
+  const last12 = accounts[0].acc;
+  const price = last12.avgPrice ? Math.round(last12.avgPrice * 100) / 100 : 5;
+  const advice = priceAdvice(last12, { currentPrice: price, krPerKw: t.krPerKw });
+  const cnUnknown = !costs.chargeNodePerPointMonth && !costs.chargeNodeSharePct && !costs.chargeNodeOrePerKwh;
+  const maxChargerPeak = chargerMonths.reduce((best, m) => (m.peakKw > (best?.peakKw ?? -1) ? m : best), null);
+
+  const money = (v) => fmtMoney(v, 'SEK');
+  const row = (label, f, cls = '') => `<tr class="${cls}"><td>${label}</td>${accounts.map(({ acc }) => `<td class="num">${f(acc)}</td>`).join('')}</tr>`;
+  const effektCell = (acc) => (acc.effekt.measured !== null
+    ? `${money(acc.effekt.expected)}<div class="subtle">${acc.effekt.measuredMonths} of ${acc.months} months measured</div>`
+    : `0 – ${money(acc.effekt.worst)}<div class="subtle">not measured yet</div>`);
+
+  body.innerHTML = `
+    ${cnUnknown ? '<div class="notice warn"><h3>ChargeNode’s fee is missing</h3>ChargeNode does not publish what it charges site owners. Enter the fee from the contract under <em>Costs</em> below (per charging point and month, a share of the revenue, or per kWh); until then the results leave it out.</div>' : ''}
+    <div class="card">
+      <div class="card-head"><h3>Is ${fmtNum(price, 1)} kr/kWh the right price?</h3><span class="subtle">last 12 full months · incl. VAT</span></div>
+      <div class="notice ${advice.level === 'ok' ? '' : advice.level === 'bad' ? 'error' : 'warn'}"><h3>${advice.level === 'ok' ? '<span class="ok">✓ Covers the costs</span>' : advice.level === 'bad' ? '<span class="bad">✕ Does not cover the costs</span>' : '⚠️ Covers the costs unless the chargers add a lot to the peaks'}</h3>${esc(advice.text)} ${esc(advice.market)}</div>
+      <div class="chart" id="economics-ladder"></div>
+      <div class="subtle">Break-even: the price per kWh incl. VAT at which the charging revenue exactly pays for the electricity (${fmtNum(t.retailOre + t.transferOre + t.energyTaxOre, 0)} öre/kWh excl. VAT), ChargeNode, this system${costs.targetMarginOre ? ` and a margin of ${fmtNum(costs.targetMarginOre, 0)} öre/kWh` : ''}, with three assumptions for the effektavgift the chargers add. The market band is public AC charging in Sweden in 2026.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Accounts</h3><span class="subtle">kr excl. VAT unless stated · the club pays 1 kr of every 5 kr/kWh on to the state as VAT</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th></th>${accounts.map(({ period }) => `<th class="num">${esc(period.label)}</th>`).join('')}</tr></thead>
+        <tbody>
+          ${row('Charging sessions', (a) => fmtNum(a.sessions, 0))}
+          ${row('Energy charged', (a) => `${fmtNum(a.kwh, 0)} kWh`)}
+          ${row('Average price incl. VAT', (a) => (a.avgPrice ? `${fmtNum(a.avgPrice, 2)} kr/kWh` : '–'))}
+          ${row('<strong>Revenue</strong> (excl. VAT)', (a) => `<strong>${money(a.revenue)}</strong>`)}
+          ${row('− Electricity (energy, transfer, tax)', (a) => money(-a.energyCost))}
+          ${row('− ChargeNode', (a) => (cnUnknown ? '<span class="subtle">fee missing</span>' : money(-a.chargeNode)))}
+          ${row(`− This system (E.ON API ${fmtNum(costs.eonMeterKrMonth + costs.eonCostsKrMonth, 0)} kr/month from ${monthLabel(costs.systemSince || '2026-11')}${costs.otherKrYear ? ', other' : ''})`, (a) => money(-a.system))}
+          ${row('= Before the effektavgift', (a) => `<strong>${money(a.net.none)}</strong>`, 'subtotal')}
+          ${row('− Effektavgift the chargers added', (a) => effektCell(a))}
+          ${row('<strong>= Result</strong>', (a) => (a.effekt.measured !== null
+            ? `<strong class="${a.net.expected >= 0 ? 'ok' : 'bad'}">${money(a.net.expected)}</strong>`
+            : `<strong>${money(a.net.worst)} … ${money(a.net.none)}</strong><div class="subtle">worst case … no effektavgift</div>`), 'total')}
+          ${row('Break-even price incl. VAT', (a) => (a.breakEven.none !== null ? (a.effekt.measured !== null ? `${fmtNum(a.breakEven.expected, 2)} kr` : `${fmtNum(a.breakEven.none, 2)} – ${fmtNum(a.breakEven.worst, 2)} kr`) : '–'))}
+        </tbody>
+      </table></div>
+      <div class="subtle">The effektavgift the chargers added is measured from E.ON’s meter values where they exist: the billed peak with the chargers minus the billed peak without them, × ${fmtNum(t.krPerKw, 0)} kr/kW. Without meter values it is shown as a range: from nothing (the chargers never ran in the club’s peak hour) to the worst case (their own monthly peak always landed on top of the club’s). Electricity prices come from the <a href="#meter">Meter</a> tab’s tariff.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Did lowering the peaks pay?</h3></div>
+      ${savingsHtml(savings, chargerMonths, maxChargerPeak, t)}
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Costs</h3><span class="subtle">kr excl. VAT · saved in this browser</span></div>
+      <form class="filters tariff-form" id="economics-costs">
+        <label title="ChargeNode's fixed fee per charging point and month, from the contract">ChargeNode <input type="number" name="chargeNodePerPointMonth" value="${costs.chargeNodePerPointMonth}" step="1" min="0"> kr/point/month</label>
+        <label title="Share of the charging revenue (excl. VAT) ChargeNode keeps">+ <input type="number" name="chargeNodeSharePct" value="${costs.chargeNodeSharePct}" step="0.5" min="0"> % of revenue</label>
+        <label title="ChargeNode fee per kWh, if the contract has one">+ <input type="number" name="chargeNodeOrePerKwh" value="${costs.chargeNodeOrePerKwh}" step="1" min="0"> öre/kWh</label>
+        <label title="E.ON Energidata, mätvärden">E.ON meter values <input type="number" name="eonMeterKrMonth" value="${costs.eonMeterKrMonth}" step="1" min="0"> kr/month</label>
+        <label title="E.ON Energidata, kostnadsuppdelning: 49 kr/month if bought">E.ON cost breakdown <input type="number" name="eonCostsKrMonth" value="${costs.eonCostsKrMonth}" step="1" min="0"> kr/month</label>
+        <label title="Anything else a year. GitHub Actions and Pages are free within the current plan.">Other <input type="number" name="otherKrYear" value="${costs.otherKrYear}" step="10" min="0"> kr/year</label>
+        <label title="Margin wanted on top of all costs, for the break-even price">Margin <input type="number" name="targetMarginOre" value="${costs.targetMarginOre}" step="5" min="0"> öre/kWh</label>
+        <button type="submit" class="primary">Recalculate</button>
+        <button type="button" id="economics-reset">Defaults</button>
+      </form>
+      <div class="subtle">This system: E.ON meter values ${fmtMoney(costs.eonMeterKrMonth * 12, 'SEK')}/year${costs.eonCostsKrMonth ? ` + cost breakdown ${fmtMoney(costs.eonCostsKrMonth * 12, 'SEK')}/year` : ''}; GitHub (hourly job and the published site) costs nothing within the plan’s 3,000 Actions minutes a month. Electricity prices and the effektavgift are set on the <a href="#meter">Meter</a> tab.</div>
+    </div>`;
+
+  drawPriceLadder($('#economics-ladder'), last12, price);
+  $('#economics-costs').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    const next = { ...state.economics.costs };
+    for (const key of Object.keys(DEFAULT_COSTS)) {
+      const value = Number(form.get(key));
+      if (form.has(key) && Number.isFinite(value) && value >= 0) next[key] = value;
+    }
+    state.economics.costs = next;
+    saveCosts(next);
+    renderEconomics();
+  });
+  $('#economics-reset').addEventListener('click', () => {
+    state.economics.costs = { ...DEFAULT_COSTS };
+    saveCosts(state.economics.costs);
+    renderEconomics();
+  });
+}
+
+function savingsHtml(savings, chargerMonths, maxChargerPeak, t) {
+  const modelNote = maxChargerPeak
+    ? `<p>From the charge records alone: the chargers’ own highest hour was <strong>${fmtNum(maxChargerPeak.peakKw, 1)} kW</strong> (${esc(monthLabel(maxChargerPeak.month))}), so the charger limits of 57 and 43.5 kW never actually cut them. A saving can only come from where the chargers’ load lands relative to the rest of the club, which is what the whole-facility ceiling of 25 kW (from 2 Nov 2026) acts on, and that needs the E.ON meter values to measure.</p>`
+    : '';
+  if (!savings.length) return `${modelNote}<p class="subtle">No meter values from E.ON yet; this table fills in once the hourly job has read them.</p>`;
+  const total = savings.reduce((s, m) => s + m.savedKr, 0);
+  const added = savings.reduce((s, m) => s + m.addedKr, 0);
+  return `${modelNote}
+    <p>With the meter values: in the months below the chargers added <strong>${fmtMoney(added, 'SEK')}</strong> to the effektavgift; without any limit they would have added <strong>${fmtMoney(added + total, 'SEK')}</strong>. The limits saved <strong>${fmtMoney(total, 'SEK')}</strong> (excl. VAT, ${fmtNum(t.krPerKw, 0)} kr/kW, the highest hour per month).</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Month</th><th>Limit</th><th class="num">Peak without chargers</th><th class="num">Actual peak</th><th class="num">Peak if unlimited</th><th class="num">Chargers added</th><th class="num">Saved by the limit</th></tr></thead>
+      <tbody>${savings.map((m) => `<tr>
+        <td>${esc(monthLabel(m.month))}</td>
+        <td>${limitCellHtml(m.limit)}</td>
+        <td class="num">${fmtNum(m.withoutChargersKw, 1)} kW</td>
+        <td class="num">${fmtNum(m.actualKw, 1)} kW</td>
+        <td class="num">${fmtNum(m.unlimitedKw, 1)} kW</td>
+        <td class="num">${fmtMoney(m.addedKr, 'SEK')}</td>
+        <td class="num">${m.savedKr > 0 ? `<span class="ok">${fmtMoney(m.savedKr, 'SEK')}</span>` : fmtMoney(0, 'SEK')}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+    <div class="subtle">“If unlimited” puts the chargers’ unlimited estimate on top of the measured rest of the club. The demo and the first months are estimates; the comparison gets better with every month of meter values.</div>`;
+}
+
+// A price ladder: the break-even prices, the market band and the current price on one kr/kWh axis.
+function drawPriceLadder(container, acc, price) {
+  if (!container || acc.breakEven.none === null) return;
+  const W = 960;
+  const H = 150;
+  const pad = { l: 20, r: 20, t: 30, b: 34 };
+  const measured = acc.effekt.measured !== null;
+  const marks = [
+    { kr: acc.breakEven.none, label: 'break-even, no effektavgift', cls: 'other' },
+    ...(measured ? [{ kr: acc.breakEven.expected, label: 'break-even, measured', cls: 'chargers' }] : []),
+    { kr: acc.breakEven.worst, label: 'break-even, worst case', cls: 'chargers' },
+  ];
+  const max = Math.max(8, Math.ceil(Math.max(price, MARKET_BAND.high, ...marks.map((m) => m.kr)) + 0.5));
+  const x = (kr) => pad.l + (Math.min(kr, max) / max) * (W - pad.l - pad.r);
+  const y0 = pad.t + 40;
+  const ticks = Array.from({ length: max + 1 }, (_, i) => `<line class="grid-line" x1="${x(i)}" x2="${x(i)}" y1="${pad.t}" y2="${y0 + 14}"></line><text class="tick" x="${x(i)}" y="${H - 12}" text-anchor="middle">${i} kr</text>`).join('');
+  const band = `<rect class="market-band" x="${x(MARKET_BAND.low)}" y="${pad.t}" width="${x(MARKET_BAND.high) - x(MARKET_BAND.low)}" height="${y0 + 14 - pad.t}" rx="4"></rect><text class="tick" x="${(x(MARKET_BAND.low) + x(MARKET_BAND.high)) / 2}" y="${pad.t - 8}" text-anchor="middle">public AC charging ${fmtNum(MARKET_BAND.low, 2)}–${fmtNum(MARKET_BAND.high, 2)} kr</text>`;
+  const dots = marks.map((m, i) => `<circle class="dot ${m.cls}" cx="${x(m.kr)}" cy="${y0}" r="6"></circle><text class="tick" x="${x(m.kr)}" y="${y0 - 12 - (i % 2) * 12}" text-anchor="middle">${esc(m.label)} ${fmtNum(m.kr, 2)}</text>`).join('');
+  const current = `<line class="limit-line" x1="${x(price)}" x2="${x(price)}" y1="${pad.t}" y2="${y0 + 14}" style="stroke-dasharray:none"></line><text class="bar-label" x="${x(price) + 6}" y="${y0 + 14}">our price ${fmtNum(price, 2)}</text>`;
+  container.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Break-even prices, the public price band and our price per kWh">${ticks}${band}<line class="axis-line" x1="${pad.l}" x2="${W - pad.r}" y1="${y0}" y2="${y0}"></line>${dots}${current}</svg>`;
 }
 
 // ---------------------------------------------------------------------- guide

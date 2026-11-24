@@ -113,9 +113,11 @@ function writeSite(snapshot) {
   rewrite(path.join(outDir, 'app.js'), [
     ["from './analysis.js'", `from './analysis.js?v=${buildId}'`],
     ["from './meter.js'", `from './meter.js?v=${buildId}'`],
+    ["from './economics.js'", `from './economics.js?v=${buildId}'`],
   ]);
-  // meter.js must import the same analysis.js URL, or the browser loads it twice.
+  // The other modules must import the same analysis.js URL, or the browser loads it twice.
   rewrite(path.join(outDir, 'meter.js'), [["from './analysis.js'", `from './analysis.js?v=${buildId}'`]]);
+  rewrite(path.join(outDir, 'economics.js'), [["from './analysis.js'", `from './analysis.js?v=${buildId}'`]]);
 
   fs.mkdirSync(path.join(outDir, 'data'), { recursive: true });
   fs.writeFileSync(path.join(outDir, 'data', 'snapshot.json'), JSON.stringify(snapshot));

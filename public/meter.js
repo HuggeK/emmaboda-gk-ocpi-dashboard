@@ -11,13 +11,12 @@ import { HOUR_MS, billedPeak, limitAt, limitsBetween, monthKey, isWinter, MAIN_F
 
 const MINUTE_MS = 60_000;
 
-// What one kWh and one month cost. Every default is a placeholder to be
-// replaced with the numbers on the club's own invoices (grid: E.ON Elnät;
-// energy: the electricity retailer). Öre and kr are excl. VAT.
+// What one kWh and one month cost, öre and kr excl. VAT. Replace them with the
+// numbers on the club's own invoices (grid: E.ON Elnät; energy: the retailer).
 export const DEFAULT_TARIFF = {
-  retailOre: 100, // elhandel: spot price + retailer's surcharge, average
-  transferOre: 20, // E.ON Elnät överföringsavgift
-  energyTaxOre: 36, // energiskatt (set by the state; check the invoice)
+  retailOre: 80, // elhandel: SE4 spot averaged about 67 öre in 2025, plus the retailer's surcharge
+  transferOre: 20, // E.ON Elnät överföringsavgift (placeholder)
+  energyTaxOre: 36, // energiskatt 2026 (Skatteverket: 36.0 öre/kWh; 43.9 in 2025)
   fixedKr: 600, // E.ON Elnät fast abonnemangsavgift per month
   krPerKw: DEFAULT_OPTIONS.krPerKw, // effektavgift per kW of the month's billed peak
   peakCount: 1, // the billed peak is the average of this many highest hours (on different days)

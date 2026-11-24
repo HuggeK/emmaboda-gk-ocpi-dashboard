@@ -296,6 +296,35 @@ anläggnings-id (only a short hash of it) nor the organisation number.
   hour were removed (billed peak with them − billed peak without them),
   compared with the charging revenue.
 
+## Economics tab
+
+Per year and for the last 12 full months: charging revenue (excl. VAT), the
+electricity it took (kWh × energy + transfer + energy tax from the Meter tab's
+tariff), ChargeNode's fee, this system's cost, and the effektavgift the
+chargers added. That last one is measured from the E.ON values where they
+exist (billed peak with the chargers − billed peak without them); without
+them it is a range from nothing to the worst case (the chargers' own monthly
+peak always on top of the club's). From that it gives the break-even price
+per kWh and a verdict on the current price, and with meter values a table of
+what lowering the limits saved (the chargers' unlimited estimate on top of
+the measured rest of the club, minus the actual peak).
+
+Costs are set on the tab and saved in the browser. ChargeNode does not publish
+its fee to site owners, so it starts at 0 and the tab says it is missing. The
+E.ON meter values (19 kr/month) count from November 2026, when they were
+bought; the 49 kr/month cost breakdown is 0 unless bought. GitHub costs
+nothing within the plan.
+
+Reference figures used for defaults and the market band:
+
+- Energy tax 2026: 36.0 öre/kWh excl. VAT (43.9 in 2025) —
+  [Skatteverket](https://www.skatteverket.se/foretag/skatterochavdrag/punktskatter/energiskatter/skattpael).
+- SE4 spot price 2025: about 84 öre/kWh incl. VAT (≈ 67 excl.) —
+  [boio.se](https://boio.se/el/elpris-historik/2025); the default 80 öre adds the retailer's surcharge.
+- Public AC charging 2026: Mer's plans 3.75–4.98 kr/kWh, Recharge and OKQ8
+  5.49 kr/kWh — [Realtid](https://www.realtid.se/efter-chockhojningen-i-hostas-nu-sanker-laddjatten-priserna/),
+  [hurbra.se](https://hurbra.se/vad-kostar-det-att-ladda-en-elbil/).
+
 ## Limits
 
 The numbers depend on the limits ChargeNode's load balancing has been set to.
@@ -371,6 +400,7 @@ server/eon-client.js   E.ON Energidata API: OAuth2 client credentials, retries
 server/eon.js          Meter values: Swedish time stamps -> UTC, series choice, incremental fetch
 server/eon-demo.js     Invented meter values in E.ON's format, for demo mode
 public/meter.js        Meter maths: chargers vs. the rest, billed peaks, cost breakdown
+public/economics.js    Accounts, break-even price, what the limits saved
 server/demo-data.js    Deterministic demo data (OCPI 2.2.1 shaped)
 public/                index.html, styles.css, app.js (no build step)
 public/analysis.js     Concurrency, hourly profile and monthly peak maths (pure functions)

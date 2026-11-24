@@ -32,6 +32,8 @@ BUILDINGS = [
     {"key": "kansli", "name": "Office building (kanslibyggnaden)", "e": 536483, "n": 6265521, "roof": "Sheet metal, unusual shape"},
     {"key": "studio", "name": "Studio", "e": 536475, "n": 6265508, "roof": "Flat"},
     {"key": "gamla", "name": "Old office (gamla kansliet)", "e": 536501, "n": 6265557, "roof": "Damaged: repair before any panels"},
+    {"key": "ladan", "name": "Barn (ladan)", "e": 536482, "n": 6265589, "roof": "The energy analysis's 60 kWp option"},
+    {"key": "restaurang", "name": "Restaurant", "e": 536516, "n": 6265488, "roof": "Kitchen, cold rooms and heat pump underneath: high daytime use"},
 ]
 
 PANEL_W = 1.134  # m, along the roof's contour (portrait)

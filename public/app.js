@@ -2466,7 +2466,7 @@ function installerHtml(data, buildings) {
           <li><strong>No cloud, nothing that calls home.</strong> It must be commissioned and run entirely on the local network, without a manufacturer account or portal (Fronius Solar.web stays off), on a network without internet access.</li>
           <li><strong>Wired Ethernet</strong>, not only Wi-Fi.</li>
           <li><strong>Open local data and control:</strong> Modbus TCP with SunSpec and the local JSON interface (Solar API), so the club’s own dashboard can read it and limit its output.</li>
-          <li><strong>Solar only, no hybrid.</strong> No lithium battery is planned. A battery (perhaps sodium-ion) may come later on the AC side, possibly with island operation through a system such as Victron, which works together with Fronius.</li>
+          <li><strong>Solar only, no hybrid.</strong> No lithium battery is planned. A battery (perhaps sodium-ion) may come later.</li>
           <li><strong>Four MPP trackers</strong> (2 inputs each, 150–870 V), so one inverter takes both buildings: west 42°, east 38° + 41° in one string, south 16° and the studio’s north 13°.</li>
           <li><strong>Quiet:</strong> about 55–57 dB(A) at 1 m on the datasheets for the Verto 25–27 class. The office building is next to the 9th hole, so please propose a place indoors or on the side facing away from it, in shade.</li>
           <li><strong>The full power from the hardware</strong>, without licence upgrades.</li>

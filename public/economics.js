@@ -4,7 +4,7 @@
 //
 // All amounts are kr excl. VAT unless a name says otherwise. The club charges
 // a fixed price incl. VAT (5 kr/kWh); 1 kr of it is VAT that goes to the state.
-import { billedPeak, monthKey, limitAt } from './analysis.js';
+import { billedPeak, monthKey, limitAt, limitsBetween, isWinter } from './analysis.js';
 
 // What running the chargers and this dashboard costs besides the electricity.
 // ChargeNode does not publish its fee to site owners: copy it from the contract.
@@ -113,16 +113,72 @@ export function limitSavings(rows, unlimited, { krPerKw }) {
     const without = billedPeak(hours.map((h) => ({ at: h.at, kw: h.otherKw })), 1).kw;
     const actual = billedPeak(hours.map((h) => ({ at: h.at, kw: h.meterKw })), 1).kw;
     const unlimitedPeak = billedPeak(hours.map((h) => ({ at: h.at, kw: h.otherKw + (unlimited.get(h.at)?.rawKw || 0) })), 1).kw;
+    const [year, mo] = month.split('-').map(Number);
     const limit = limitAt(hours[0].at);
+    const limits = limitsBetween(new Date(year, mo - 1, 1).getTime(), new Date(year, mo, 1).getTime());
     return {
       month,
       limit,
+      limits,
       actualKw: actual,
       withoutChargersKw: without,
       unlimitedKw: unlimitedPeak,
       addedKr: Math.max(0, actual - without) * krPerKw,
       unlimitedAddedKr: Math.max(0, unlimitedPeak - without) * krPerKw,
       savedKr: Math.max(0, unlimitedPeak - actual) * krPerKw,
+    };
+  });
+}
+
+// Is the winter ceiling worth the yearly e-mail? For each winter with meter
+// values (26 Oct – 28 Feb), with the chargers' unlimited estimate on top of
+// the measured rest of the club: the effektavgift they would add without a
+// ceiling, what they add with one at ceilingKw (they only get ceiling − the
+// rest), and the charging the ceiling holds back. Held-back energy is often
+// only delayed (cars stay plugged in for hours), so its margin is an upper
+// bound on what the ceiling costs. rows: splitHours() rows; unlimited:
+// hourlyProfile() with limits 'none'.
+export function winterCeilingCheck(rows, unlimited, { ceilingKw, krPerKw, marginPerKwh, now = Date.now() }) {
+  const winters = new Map();
+  for (const r of rows) {
+    if (!isWinter(r.at)) continue;
+    const d = new Date(r.at);
+    const startYear = d.getMonth() >= 9 ? d.getFullYear() : d.getFullYear() - 1; // Oct–Dec start it, Jan–Feb belong to it
+    const w = winters.get(startYear) || new Map();
+    const key = monthKey(r.at);
+    (w.get(key) || w.set(key, []).get(key)).push(r);
+    winters.set(startYear, w);
+  }
+  return [...winters.entries()].sort((a, b) => a[0] - b[0]).map(([year, months]) => {
+    let without = 0;
+    let withCeiling = 0;
+    let charged = 0;
+    let held = 0;
+    let hours = 0;
+    for (const hs of months.values()) {
+      const demand = (h) => unlimited.get(h.at)?.rawKw || 0;
+      const allowed = (h) => Math.min(demand(h), Math.max(0, ceilingKw - h.otherKw));
+      const rest = Math.max(...hs.map((h) => h.otherKw));
+      without += Math.max(0, Math.max(...hs.map((h) => h.otherKw + demand(h))) - rest) * krPerKw;
+      withCeiling += Math.max(0, Math.max(...hs.map((h) => h.otherKw + allowed(h))) - rest) * krPerKw;
+      for (const h of hs) {
+        charged += demand(h);
+        held += demand(h) - allowed(h);
+      }
+      hours += hs.length;
+    }
+    const saved = without - withCeiling;
+    const lostMargin = held * marginPerKwh;
+    return {
+      winter: `${year}/${String(year + 1).slice(2)}`,
+      complete: new Date(year + 1, 2, 1).getTime() <= now && hours > 2800,
+      chargedKwh: charged,
+      heldKwh: held,
+      addedWithoutKr: without,
+      addedWithKr: withCeiling,
+      savedKr: saved,
+      lostMarginKr: lostMargin,
+      netKr: saved - lostMargin,
     };
   });
 }

@@ -420,3 +420,22 @@ scripts/ocpi-handshake.js             Exchanges a registration key for the real 
 .github/scripts/report-run.cjs        Comments each run's outcome on the tracking issue
 .github/workflows/season-reminder.yml Yearly reminders to e-mail ChargeNode (26 Oct, 1 Mar)
 ```
+
+## License
+
+[Mozilla Public License 2.0](LICENSE) (MPL-2.0).
+
+- **You may** use, copy and change this code, also in commercial and closed
+  products, and combine it with code under other licenses.
+- **You must** make the source code of the files from this project, with
+  your changes, available under MPL-2.0 to everyone you give the program to.
+  New files of your own can stay under your own license.
+- Please send improvements back to the project as a pull request. The
+  license requires the changed source to be available to those you
+  distribute to; a pull request is the easiest way to do that and keeps
+  everyone on the same version.
+
+The license applies per file ("file-level copyleft"), which is why it fits a
+dashboard that others may want to build into their own products. Like GPL, it
+only applies when the program is handed out: running a changed copy on your
+own server, without distributing it, does not oblige you to share the changes.

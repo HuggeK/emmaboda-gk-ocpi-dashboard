@@ -2466,7 +2466,7 @@ function installerHtml(data, buildings) {
           <li><strong>No cloud, nothing that calls home.</strong> It must be commissioned and run entirely on the local network, without a manufacturer account or portal (Fronius Solar.web stays off), on a network without internet access.</li>
           <li><strong>Wired Ethernet</strong>, not only Wi-Fi.</li>
           <li><strong>Open local data and control:</strong> Modbus TCP with SunSpec and the local JSON interface (Solar API), so the club’s own dashboard can read it and limit its output.</li>
-          <li><strong>Solar only, no hybrid.</strong> No lithium battery is planned. A battery (perhaps sodium-ion) may come later on the AC side, possibly with island operation through a system such as Victron, which works together with Fronius.</li>
+          <li><strong>Solar only, no hybrid.</strong> No lithium battery is planned. A battery (perhaps sodium-ion) may come later.</li>
           <li><strong>Four MPP trackers</strong> (2 inputs each, 150–870 V), so one inverter takes both buildings: west 42°, east 38° + 41° in one string, south 16° and the studio’s north 13°.</li>
           <li><strong>Quiet:</strong> about 55–57 dB(A) at 1 m on the datasheets for the Verto 25–27 class. The office building is next to the 9th hole, so please propose a place indoors or on the side facing away from it, in shade.</li>
           <li><strong>The full power from the hardware</strong>, without licence upgrades.</li>
@@ -2629,7 +2629,7 @@ async function renderSolar() {
         <li><strong>It lowers the energy bill.</strong> About 85 % of the value is electricity the club does not have to buy: a solar kWh used on site saves the contract price, the grid energy fee and the energy tax, about ${fmtNum(SOLAR_SIMULATION.krPerKwhOnSite, 2)} kr/kWh excl. VAT. The club uses the most power in the daytime in season, when the sun shines.</li>
         <li><strong>It barely lowers the peak.</strong> The effektavgift is set by the month’s single highest hour, and that hour moves to the evening, an irrigation night or a cloudy day once the panels cover the middle of the day: even 80 kWp lowers the summer peak by only about 9 kW. The peak needs the ceilings (Economics tab).</li>
         <li><strong>It goes well with the chargers.</strong> Golfers charge while they play, in the middle of the day: under a whole-facility ceiling, solar gives the chargers more room.</li>
-        <li><strong>Check before buying:</strong> the studio roof (the laser data says it slopes 13° to the north, not flat), the office’s distribution point capacity with the electrician, quotes from 2–3 installers. The barn’s asbestos roof and the old office’s split roof come first (the card above).</li>
+        <li><strong>Check before buying:</strong> the studio roof’s exact pitch (it slopes, about 13° to the north by the laser data) and its load capacity, the office’s distribution point capacity with the electrician, quotes from 2–3 installers. The barn’s asbestos roof and the old office’s split roof come first (the card above).</li>
       </ul>
     </div>
     ${installerHtml(s.data, buildings)}

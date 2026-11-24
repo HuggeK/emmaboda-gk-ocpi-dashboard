@@ -34,7 +34,7 @@ gdal.UseExceptions()
 BUILDINGS = [
     {"key": "kansli", "name": "Office building (kanslibyggnaden)", "e": 536483, "n": 6265521, "roof": "Sheet metal, unusual shape; a chimney on the west roof",
      "obstacles": [{"e": 536482.0, "n": 6265524.3, "r_m": 0.7, "what": "chimney on the west roof (from the aerial photo, about ±1 m)"}]},
-    {"key": "studio", "name": "Studio", "e": 536475, "n": 6265508, "roof": "Described as flat; the laser data shows 13° to the north: check on site"},
+    {"key": "studio", "name": "Studio", "e": 536475, "n": 6265508, "roof": "Sloping, not flat: about 13° to the north (laser data)"},
     # The old office has a lower-pitched lean-to (the golf carts' extension)
     # along its north side, against the steeper main roof. The laser data is
     # too sparse to separate the two, so the lean-to is described: its depth

@@ -60,6 +60,10 @@ jobs:
         id: build
         env:
           OCPI_TOKEN: ${{ secrets.SECRET_KEY }}
+          # E.ON Energidata API (grid meter values) for the Meter tab. Optional;
+          # an E.ON failure never fails the run, it shows on the Meter tab.
+          EON_CLIENT_ID: ${{ secrets.CLIENTID }}
+          EON_CLIENT_SECRET: ${{ secrets.CLIENTSECRET }}
           SNAPSHOT_BASE_URL: ${{ steps.pages.outputs.base_url }}/data/snapshot.json
         run: |
           full=""
@@ -93,6 +97,10 @@ jobs:
           INCREMENTAL: ${{ steps.build.outputs.incremental }}
           SESSIONS_30D: ${{ steps.build.outputs.sessions_30d }}
           KWH_30D: ${{ steps.build.outputs.kwh_30d }}
+          EON_RESULT: ${{ steps.build.outputs.eon_result }}
+          EON_HOURS: ${{ steps.build.outputs.eon_hours }}
+          EON_LAST: ${{ steps.build.outputs.eon_last }}
+          EON_ERROR: ${{ steps.build.outputs.eon_error }}
           PAGE_URL: ${{ steps.deployment.outputs.page_url }}
         with:
           script: |

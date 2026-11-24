@@ -67,7 +67,7 @@ test('hourlyProfile: clock-hour buckets, session counts and the cap', () => {
   assert.equal(at(10).revenue, 11);
   assert.equal(at(11).revenue, 22);
   assert.equal(at(12).revenue, 11);
-  const capped = hourlyProfile([r, record('b', T0, 4, 22)], { model: 'front', rateKw: 11, capKw: 15 });
+  const capped = hourlyProfile([r, record('b', T0, 4, 22)], { model: 'front', rateKw: 11, limits: 'seasonal', capKw: 15 });
   assert.equal(capped.get(Date.parse('2026-06-10T11:00:00Z')).kw, 15);
   assert.equal(capped.get(Date.parse('2026-06-10T11:00:00Z')).rawKw, 22);
   assert.equal(capped.get(Date.parse('2026-06-10T11:00:00Z')).sessions, 2);
@@ -114,7 +114,8 @@ test('analyze runs on demo data and stays within the charger count', async () =>
   assert.ok(result.plugged.peak.count >= 1 && result.plugged.peak.count <= 6);
   assert.ok(result.charging.peak.count <= result.plugged.peak.count);
   assert.ok(result.months.length >= 1);
-  assert.ok(result.peakHour.kw <= 43.5);
+  assert.ok(result.peakHour.kw <= 57); // the highest charger limit ChargeNode has had
+  assert.ok(result.months.every((m) => m.limit && m.capKw > 0));
   assert.equal(result.matrix.cells.length, 7);
   assert.equal(result.top.length, 10);
   assert.ok(result.revenue > 0);

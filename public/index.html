@@ -23,8 +23,11 @@
       <a href="#live" data-tab="live">Live</a>
       <a href="#records" data-tab="records">Records</a>
       <a href="#analysis" data-tab="analysis">Analysis</a>
+      <a href="#meter" data-tab="meter">Meter</a>
+      <a href="#economics" data-tab="economics">Economics</a>
       <a href="#chargers" data-tab="chargers">Chargers</a>
       <a href="#connection" data-tab="connection">Connection</a>
+      <a href="#guide" data-tab="guide" lang="sv">Så funkar det</a>
     </nav>
     <div class="conn" id="conn-indicator" title="Connection state">
       <span class="conn-dot" data-state="unknown"></span>
@@ -36,12 +39,15 @@
     <section id="view-live" class="view" hidden></section>
     <section id="view-records" class="view" hidden></section>
     <section id="view-analysis" class="view" hidden></section>
+    <section id="view-meter" class="view" hidden></section>
+    <section id="view-economics" class="view" hidden></section>
     <section id="view-chargers" class="view" hidden></section>
     <section id="view-connection" class="view" hidden></section>
+    <section id="view-guide" class="view" lang="sv" hidden></section>
   </main>
 
   <footer class="footer">
-    <span>Data via OCPI from ChargeNode. Runs locally; the token never leaves this machine.</span>
+    <span>Data via OCPI from ChargeNode and meter values from E.ON. Runs locally; the keys never leave this machine.</span>
   </footer>
 
   <div id="tooltip" class="tooltip" role="tooltip" hidden></div>

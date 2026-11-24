@@ -10,9 +10,16 @@ the OCPI API that ChargeNode exposes for the chargers.
 - **Analysis** - how often several chargers run at once, the busy hours
   (weekday × hour heatmap) and an estimate of the effektavgift the chargers
   alone would cause, computed from the charge records.
+- **Meter** - the whole facility's measured hourly power from E.ON's grid
+  meter, split into the chargers' (estimated) part and everything else, the
+  limits in force, monthly billed peaks, and a cost breakdown worked out from
+  the meter values. See [Grid meter (E.ON)](#grid-meter-eon).
 - **Chargers** - the locations, charging points (EVSEs) and connectors ChargeNode
   publishes.
-- **Connection** - exactly what the OCPI server answered, for troubleshooting.
+- **Connection** - exactly what the OCPI server and E.ON answered, for troubleshooting.
+- **Så funkar det** - a plain-language explanation in Swedish for club members:
+  where the numbers come from, why one hour can set the month's effektavgift,
+  and what the limits mean, with diagrams.
 
 Everything runs on your own computer. A tiny Node server keeps the OCPI token
 out of the browser and proxies the OCPI calls (the OCPI server does not allow
@@ -189,7 +196,7 @@ browser  ──►  http://127.0.0.1:3000  ──►  server/index.js  ──►
    header) and flattens OCPI 2.1.1 / 2.2 / 2.2.1 shapes into one format.
 4. Responses are cached briefly (10-60 s) to be gentle on the OCPI server.
 
-Local API routes: `/api/status`, `/api/live`, `/api/locations`,
+Local API routes: `/api/status`, `/api/live`, `/api/locations`, `/api/eon`,
 `/api/sessions`, `/api/cdrs`, `/api/tariffs`. All are GET and return JSON.
 
 ## Analysis tab
@@ -221,9 +228,129 @@ it shows and how it is computed:
   deliver, and therefore how much overlaps in any hour.
 
 Everything on the tab is **chargers only**. The real effektavgift is billed
-on the whole subscription's highest hourly average, so the club's other loads
-in the same hours are missing. Seeing the real peak needs the grid company's
-hourly meter values (E.ON's API) or a HAN-port meter on the main incomer.
+on the whole facility's highest hourly average, so the club's other loads
+in the same hours are missing; the Meter tab has the measured values. Hours are
+capped at the limit in force at the time (see [Limits](#limits)).
+
+## Grid meter (E.ON)
+
+ChargeNode reports energy per charging session, not power, so the chargers'
+power per hour is a model. The grid company measures the real thing: E.ON's
+**Energidata API** (<https://navigator-api.eon.se>, bought as the
+*mätvärden* subscription) gives the facility's energy per hour and per quarter
+hour. Energy in one hour (kWh) is the hour's average power (kW), which is
+exactly what the effektavgift is billed on.
+
+**Credentials.** OAuth2 client credentials: the client id and secret from the
+Navigator portal are exchanged at `/connect/token` (scope `navigator`) for a
+bearer token. They are stored as repository secrets and passed to the build:
+
+```powershell
+gh secret set CLIENTID -R HuggeK/emmaboda-gk-ocpi-dashboard       # paste the client id
+gh secret set CLIENTSECRET -R HuggeK/emmaboda-gk-ocpi-dashboard   # paste the client secret
+gh workflow run "Snapshot to GitHub Pages" -R HuggeK/emmaboda-gk-ocpi-dashboard
+```
+
+The workflow maps them to `EON_CLIENT_ID` / `EON_CLIENT_SECRET`. For the local
+app, pass them through the environment, not `.env`:
+
+```powershell
+$env:EON_CLIENT_ID = '<client id>'; $env:EON_CLIENT_SECRET = '<client secret>'; npm start
+```
+
+Optional: `EON_HISTORY_FROM` (default `2024-01-01`; E.ON keeps the current year
+plus five back), `EON_SERIES_ID` / `EON_INSTALLATION_ID` to pin a series or
+installation when the automatic choice (active-energy consumption in kWh) is
+wrong. The Connection tab lists the installations and series E.ON offers.
+
+**What each run fetches.** Hourly values since `EON_HISTORY_FROM` (in chunks
+under E.ON's one-year limit) and quarter-hour values for the last 35 days, kept
+for up to 92. Like the charge records, a run extends the previously published
+snapshot and only asks for the last three days again, so an hourly run makes
+about four requests. E.ON publishes values about a day late. An E.ON failure
+never fails the run: the previous values are kept, the Meter tab says why, and
+the tracking issue's status line shows `meter ❌`.
+
+**Timestamps.** E.ON writes Swedish local time without an offset, and for
+hour and quarter values the stamp is the *end* of the interval. The night the
+clocks go back the repeated hour is marked `.01` (`02:00.01` is the second
+02:00); `server/eon.js` turns all of it into UTC interval starts, and the tests
+cover both DST nights.
+
+**Privacy.** The published site is public. It carries the installation's
+name, city, grid and price area and the hourly values, but not the
+anläggnings-id (only a short hash of it) nor the organisation number.
+
+**How the Meter tab computes.**
+
+- *Chargers' part of an hour*: the charge-record model from the Analysis tab,
+  never more than the meter measured. *Everything else* = measured − chargers.
+- *Billed peak*: the month's highest hour, or the average of the 2/3/5 highest
+  hours on different days (*Billed on*; check the E.ON Elnät tariff).
+- *Cost*: kWh × (energy + transfer + energy tax) + billed peak × kr/kW + fixed
+  fee, plus VAT. The prices are placeholders to be replaced with the invoice
+  figures; they are saved in the browser. E.ON's paid cost-breakdown product
+  (49 kr/month) would give the invoice numbers instead.
+- *Chargers' share*: what the club would not have paid without them: their
+  kWh at the per-kWh prices plus the drop in effektavgift if their part of every
+  hour were removed (billed peak with them − billed peak without them),
+  compared with the charging revenue.
+
+## Economics tab
+
+Per year and for the last 12 full months: charging revenue (excl. VAT), the
+electricity it took (kWh × energy + transfer + energy tax from the Meter tab's
+tariff), ChargeNode's fee, this system's cost, and the effektavgift the
+chargers added. That last one is measured from the E.ON values where they
+exist (billed peak with the chargers − billed peak without them); without
+them it is a range from nothing to the worst case (the chargers' own monthly
+peak always on top of the club's). From that it gives the break-even price
+per kWh and a verdict on the current price, and with meter values a table of
+what lowering the limits saved (the chargers' unlimited estimate on top of
+the measured rest of the club, minus the actual peak).
+
+Costs are set on the tab and saved in the browser. ChargeNode does not publish
+its fee to site owners, so it starts at 0 and the tab says it is missing. The
+E.ON meter values (19 kr/month) count from November 2026, when they were
+bought; the 49 kr/month cost breakdown is 0 unless bought. GitHub costs
+nothing within the plan.
+
+Reference figures used for defaults and the market band:
+
+- Energy tax 2026: 36.0 öre/kWh excl. VAT (43.9 in 2025) —
+  [Skatteverket](https://www.skatteverket.se/foretag/skatterochavdrag/punktskatter/energiskatter/skattpael).
+- SE4 spot price 2025: about 84 öre/kWh incl. VAT (≈ 67 excl.) —
+  [boio.se](https://boio.se/el/elpris-historik/2025); the default 80 öre adds the retailer's surcharge.
+- Public AC charging 2026: Mer's plans 3.75–4.98 kr/kWh, Recharge and OKQ8
+  5.49 kr/kWh — [Realtid](https://www.realtid.se/efter-chockhojningen-i-hostas-nu-sanker-laddjatten-priserna/),
+  [hurbra.se](https://hurbra.se/vad-kostar-det-att-ladda-en-elbil/).
+
+## Limits
+
+The numbers depend on the limits ChargeNode's load balancing has been set to.
+They are listed in `LIMIT_HISTORY` in `public/analysis.js`, drawn in the charts
+(dashed: a limit on the chargers; dotted: a ceiling on the whole facility) and
+shown per month in the tables:
+
+| From | Limit | Meaning |
+|---|---|---|
+| (start) | chargers ≤ about 57 kW | approximate setting before July 2026 |
+| 17 Jul 2026 | chargers ≤ 63 A (43.5 kW) | the chargers together; the rest of the club is not counted |
+| 2 Nov 2026 | whole facility ≤ 36 A (≈ 25 kW) | dynamic: the chargers only get what the rest of the club leaves under 25 kW; no charging if ChargeNode's meter fails |
+| every year from 1 Mar | chargers ≤ 63 A (43.5 kW) | yearly plan: full charging for the golf season |
+| every year from 26 Oct | whole facility ≤ 36 A (≈ 25 kW) | yearly plan: the chargers only use the room left in winter |
+| always | main fuse 125 A ≈ 86.6 kW | the most the facility can draw |
+
+**Yearly plan.** After the last confirmed setting the dashboard assumes the
+plan in `SEASON_PLAN`: the club e-mails ChargeNode to lower the limit on
+26 October and raise it again on 1 March. The workflow
+`.github/workflows/season-reminder.yml` opens an issue on 12 October and
+15 February (assigned to the owner, label `chargenode-season`) with the e-mail
+ready to send; it can also be run by hand (Actions → *Season reminder*). If
+ChargeNode switches on another date, add that date as a row to `LIMIT_HISTORY`.
+
+The *Limits* control also offers a what-if (other values on the plan's
+dates: a charger limit in season, a facility ceiling in winter) and *None*.
 
 ## Troubleshooting
 
@@ -269,12 +396,18 @@ server/ocpi-client.js  Token auth, version discovery, pagination
 server/normalize.js    OCPI 2.1.1 / 2.2 / 2.2.1 payloads -> one flat shape
 server/live.js         "Right now" calculation from locations + sessions
 server/snapshot.js     One JSON snapshot of everything the UI shows (static site)
+server/eon-client.js   E.ON Energidata API: OAuth2 client credentials, retries
+server/eon.js          Meter values: Swedish time stamps -> UTC, series choice, incremental fetch
+server/eon-demo.js     Invented meter values in E.ON's format, for demo mode
+public/meter.js        Meter maths: chargers vs. the rest, billed peaks, cost breakdown
+public/economics.js    Accounts, break-even price, what the limits saved
 server/demo-data.js    Deterministic demo data (OCPI 2.2.1 shaped)
 public/                index.html, styles.css, app.js (no build step)
 public/analysis.js     Concurrency, hourly profile and monthly peak maths (pure functions)
 public/ocpi/           Static OCPI versions / credentials JSON for the handshake
 scripts/build-snapshot.js             public/ + data/snapshot.json -> dist/
 scripts/ocpi-handshake.js             Exchanges a registration key for the real key
-.github/workflows/snapshot-pages.yml  Twice-weekly fetch, deploy and report
+.github/workflows/snapshot-pages.yml  Hourly fetch (ChargeNode + E.ON), deploy and report
 .github/scripts/report-run.cjs        Comments each run's outcome on the tracking issue
+.github/workflows/season-reminder.yml Yearly reminders to e-mail ChargeNode (26 Oct, 1 Mar)
 ```

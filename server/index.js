@@ -8,6 +8,9 @@ import { createOcpiClient, OcpiError } from './ocpi-client.js';
 import { createDemoClient } from './demo-data.js';
 import { normalizeLocation, normalizeSession, normalizeCdr } from './normalize.js';
 import { computeLive } from './live.js';
+import { createEonClient, EonError } from './eon-client.js';
+import { createDemoEonClient } from './eon-demo.js';
+import { buildEonData, eonFailure } from './eon.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -108,6 +111,42 @@ function defaultRange(query, days = 30) {
   return { from, to };
 }
 
+// ---- grid meter (E.ON) ---------------------------------------------------
+// Optional. Credentials come from the environment, never from a file:
+//   $env:EON_CLIENT_ID = '...'; $env:EON_CLIENT_SECRET = '...'; npm start
+let eonData = null; // last result, extended on each refresh like the published snapshot
+async function loadEon() {
+  return cached('eon', 10 * 60_000, async () => {
+    let client;
+    if (config.demo) {
+      const { items } = await loadAllCdrsForDemo();
+      client = createDemoEonClient({ records: items });
+    } else if (process.env.EON_CLIENT_ID && process.env.EON_CLIENT_SECRET) {
+      client = createEonClient({ clientId: process.env.EON_CLIENT_ID, clientSecret: process.env.EON_CLIENT_SECRET, log: (m) => config.verbose && console.log(`[eon] ${m}`) });
+    } else {
+      return { configured: false };
+    }
+    try {
+      eonData = await buildEonData({
+        client,
+        base: eonData?.error ? null : eonData,
+        historyFrom: process.env.EON_HISTORY_FROM || '2024-01-01',
+        preferredSeriesId: process.env.EON_SERIES_ID || null,
+        preferredInstallationId: process.env.EON_INSTALLATION_ID || null,
+      });
+    } catch (err) {
+      if (!(err instanceof EonError)) console.error(err);
+      return eonFailure(err, eonData);
+    }
+    return eonData;
+  });
+}
+
+async function loadAllCdrsForDemo() {
+  const { items } = await client.getAll('cdrs', {});
+  return { items: items.map(normalizeCdr) };
+}
+
 // ---- routing -------------------------------------------------------------
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -183,6 +222,11 @@ async function handleApi(req, res, url) {
     const { from, to } = defaultRange(query, 30);
     const result = await loadCdrs(from, to);
     sendJson(res, 200, { ...result, date_from: from, date_to: to ?? null });
+    return;
+  }
+
+  if (route === '/api/eon') {
+    sendJson(res, 200, await loadEon());
     return;
   }
 

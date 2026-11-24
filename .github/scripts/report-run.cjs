@@ -100,6 +100,7 @@ function buildComment({ context, env, previous }) {
     lines.push(`- OCPI key used against ChargeNode: **yes** (OCPI ${env.OCPI_VERSION})`);
     lines.push(`- Dashboard: ${env.PAGE_URL || '(no page URL reported)'}`);
     lines.push(`- ${env.EVSES} charging points · ${env.CDR_COUNT} charge records since ${env.CDR_SINCE} (${env.INCREMENTAL === 'true' ? `${env.CDR_FETCHED} changed since the previous snapshot` : 'full fetch'}) · last 30 days: ${env.SESSIONS_30D} sessions, ${env.KWH_30D} kWh`);
+    lines.push(`- ${eonLine(env)}`);
   } else if (outcome === 'module_unauthorized' && env.DEPLOY_OUTCOME === 'success') {
     // The build publishes a data-less site when the key opens versions but not
     // the data modules; a later workflow step then marks the run failed.
@@ -138,10 +139,23 @@ function buildComment({ context, env, previous }) {
   return { outcome, body: lines.join('\n') };
 }
 
+// The grid meter (E.ON Energidata API) is optional and never fails the run,
+// so it is reported as a line of its own rather than as the outcome.
+function eonLine(env) {
+  switch (env.EON_RESULT) {
+    case 'ok': return `Grid meter (E.ON): ${env.EON_HOURS} hourly values up to ${stamp(env.EON_LAST)}${env.EON_ERROR ? ` ⚠️ ${env.EON_ERROR}` : ''}`;
+    case 'no_data': return `Grid meter (E.ON): ⚠️ connected but no values${env.EON_ERROR ? `: ${env.EON_ERROR}` : ''}`;
+    case 'error': return `Grid meter (E.ON): ❌ ${env.EON_ERROR || 'failed'} (previous values kept; check the \`CLIENTID\` / \`CLIENTSECRET\` secrets)`;
+    case 'not_configured': return 'Grid meter (E.ON): not configured (`CLIENTID` / `CLIENTSECRET` secrets unset)';
+    default: return 'Grid meter (E.ON): not reported';
+  }
+}
+
 function statusLine(outcome, env, now) {
   const icon = outcome === 'ok' ? '✅' : outcome === 'module_unauthorized' ? '⚠️' : '❌';
+  const eonIcon = { ok: env.EON_ERROR ? ' · meter ⚠️' : ' · meter ✅', no_data: ' · meter ⚠️', error: ' · meter ❌' }[env.EON_RESULT] || '';
   const details = outcome === 'ok'
-    ? ` · ${env.EVSES} charging points, ${env.CDR_COUNT} records, last 30 days ${env.SESSIONS_30D} sessions / ${env.KWH_30D} kWh`
+    ? ` · ${env.EVSES} charging points, ${env.CDR_COUNT} records, last 30 days ${env.SESSIONS_30D} sessions / ${env.KWH_30D} kWh${eonIcon}`
     : env.BUILD_ERROR ? ` · ${env.BUILD_ERROR}` : '';
   return `${icon} **${LABELS[outcome] || outcome}** · ${stamp(now.toISOString())}${details}`;
 }

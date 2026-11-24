@@ -19,6 +19,9 @@ import { fileURLToPath } from 'node:url';
 import { createOcpiClient, OcpiError } from '../server/ocpi-client.js';
 import { createDemoClient } from '../server/demo-data.js';
 import { buildSnapshot, buildEmptySnapshot } from '../server/snapshot.js';
+import { createEonClient } from '../server/eon-client.js';
+import { createDemoEonClient } from '../server/eon-demo.js';
+import { buildEonData, eonFailure } from '../server/eon.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -49,6 +52,13 @@ const config = {
   preferredVersion: process.env.OCPI_PREFERRED_VERSION || undefined,
   fromCountryCode: process.env.OCPI_FROM_COUNTRY_CODE || undefined,
   fromPartyId: process.env.OCPI_FROM_PARTY_ID || undefined,
+  // E.ON Energidata API (grid meter values). Optional: without it the Meter
+  // tab explains how to set it up.
+  eonClientId: process.env.EON_CLIENT_ID || '',
+  eonClientSecret: process.env.EON_CLIENT_SECRET || '',
+  eonHistoryFrom: process.env.EON_HISTORY_FROM || '2024-01-01',
+  eonSeriesId: process.env.EON_SERIES_ID || null,
+  eonInstallationId: process.env.EON_INSTALLATION_ID || null,
 };
 const inGitHubActions = process.env.GITHUB_ACTIONS === 'true';
 
@@ -100,7 +110,12 @@ function writeSite(snapshot) {
     ['href="styles.css"', `href="styles.css?v=${buildId}"`],
     ['src="app.js"', `src="app.js?v=${buildId}"`],
   ]);
-  rewrite(path.join(outDir, 'app.js'), [["from './analysis.js'", `from './analysis.js?v=${buildId}'`]]);
+  rewrite(path.join(outDir, 'app.js'), [
+    ["from './analysis.js'", `from './analysis.js?v=${buildId}'`],
+    ["from './meter.js'", `from './meter.js?v=${buildId}'`],
+  ]);
+  // meter.js must import the same analysis.js URL, or the browser loads it twice.
+  rewrite(path.join(outDir, 'meter.js'), [["from './analysis.js'", `from './analysis.js?v=${buildId}'`]]);
 
   fs.mkdirSync(path.join(outDir, 'data'), { recursive: true });
   fs.writeFileSync(path.join(outDir, 'data', 'snapshot.json'), JSON.stringify(snapshot));
@@ -146,6 +161,42 @@ function describe(snapshot) {
   };
 }
 
+// Grid meter values from E.ON, added to the snapshot. A failure here never
+// fails the build: the previous snapshot's values are kept with the reason.
+async function addEon(snapshot, base) {
+  const eonLog = (message) => {
+    if (config.verbose) console.log(`[eon] ${message}`);
+  };
+  let client;
+  if (config.demo) client = createDemoEonClient({ records: snapshot.cdrs.items });
+  else if (config.eonClientId && config.eonClientSecret) client = createEonClient({ clientId: config.eonClientId, clientSecret: config.eonClientSecret, log: eonLog });
+  else {
+    snapshot.eon = { configured: false };
+    console.log('E.ON: not configured (EON_CLIENT_ID / EON_CLIENT_SECRET unset); the Meter tab says how to set it up.');
+    return { eon_result: 'not_configured' };
+  }
+  try {
+    snapshot.eon = await buildEonData({
+      client,
+      base: base?.eon?.configured ? base.eon : null,
+      full: config.full,
+      historyFrom: config.eonHistoryFrom,
+      preferredSeriesId: config.eonSeriesId,
+      preferredInstallationId: config.eonInstallationId,
+    });
+  } catch (err) {
+    snapshot.eon = eonFailure(err, base?.eon?.configured ? base.eon : null);
+    console.warn(`E.ON: ${err.message} (kept the previous meter values)`);
+    return { eon_result: 'error', eon_error: err.message };
+  }
+  const withData = snapshot.eon.installations.filter((i) => i.hourly);
+  const hours = withData.reduce((n, i) => n + i.hourly.values.filter((v) => v !== null).length, 0);
+  const last = withData.map((i) => i.last_value_end).filter(Boolean).sort().at(-1) || '';
+  const problems = snapshot.eon.installations.flatMap((i) => i.errors.map((e) => `${i.name || i.ref} ${e.resolution || ''}: ${e.message}`));
+  console.log(`E.ON: ${snapshot.eon.installations.length} installation(s), ${hours} hourly values up to ${last || '–'}${problems.length ? `; ${problems.join('; ')}` : ''}`);
+  return { eon_result: withData.length ? 'ok' : 'no_data', eon_hours: hours, eon_last: last, eon_error: problems.join('; ') };
+}
+
 // Set once ChargeNode has accepted the key on the versions endpoint, so a
 // later 401 on a data module can be told apart from a rejected key.
 let keyAccepted = false;
@@ -176,6 +227,14 @@ async function main() {
     dataError = err.toJSON();
     snapshot = buildEmptySnapshot({ client, discovery, dataError, generator });
   }
+  const eonInfo = await addEon(snapshot, base);
+  setOutputs(eonInfo);
+  addSummary(`### Grid meter (E.ON)\n\n${{
+    ok: `${eonInfo.eon_hours} hourly values, up to ${eonInfo.eon_last}.${eonInfo.eon_error ? ` Problems: ${eonInfo.eon_error}` : ''}`,
+    no_data: `Connected, but no meter values came back. ${eonInfo.eon_error || ''}`,
+    error: `Failed: ${eonInfo.eon_error}. The previous values were kept.`,
+    not_configured: 'Not configured: set the CLIENTID and CLIENTSECRET repository secrets.',
+  }[eonInfo.eon_result]}\n`);
   writeSite(snapshot);
 
   const info = describe(snapshot);

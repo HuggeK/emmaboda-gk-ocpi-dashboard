@@ -1,7 +1,7 @@
 # Fetches the latest data from ChargeNode with the OCPI key, builds the static
-# dashboard and publishes it to GitHub Pages. Runs every hour (about 720 of the
-# account's 3,000 Actions minutes a month); using the key that often also keeps
-# it alive at ChargeNode. The outcome is tracked on an issue: a comment when it
+# dashboard and publishes it to GitHub Pages. Runs every hour (free: the
+# repository is public); using the key that often also keeps it alive at
+# ChargeNode. The outcome is tracked on an issue: a comment when it
 # changes (and daily while failing), a status line in the issue body every run.
 name: Snapshot to GitHub Pages
 
@@ -23,6 +23,7 @@ on:
       - '.github/**'
 
 permissions:
+  actions: write # to keep the scheduled workflows enabled, see the last step
   contents: read
   pages: write
   id-token: write
@@ -130,6 +131,21 @@ jobs:
           script: |
             const report = require('./.github/scripts/report-run.cjs');
             await report({ github, context, core });
+
+      # GitHub switches off scheduled workflows in public repositories after
+      # 60 days without activity. Re-enabling them through the API resets that
+      # timer, so once a day (the 03:xx UTC run) both scheduled workflows are
+      # re-enabled. Never fails the run.
+      - name: Keep the scheduled workflows enabled
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$(date -u +%H)" != "03" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then exit 0; fi
+          for workflow in snapshot-pages.yml season-reminder.yml; do
+            gh api -X PUT "repos/${{ github.repository }}/actions/workflows/$workflow/enable" && echo "re-enabled $workflow"
+          done
 
       # The site is published even when ChargeNode refuses the data modules
       # (see scripts/build-snapshot.js), but the run must still show as failed.

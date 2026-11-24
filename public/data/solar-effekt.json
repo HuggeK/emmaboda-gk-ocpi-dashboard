@@ -11,14 +11,14 @@
    "keys": [
     "kansli"
    ],
-   "kwp": 21.93,
-   "kwh": 17158,
-   "onSite": 0.999,
-   "summerCutKw": 4.8,
-   "effektKr": 4589,
-   "effektMin": 4056,
-   "effektMax": 5835,
-   "energyKr": 22239,
+   "kwp": 17.63,
+   "kwh": 13992,
+   "onSite": 1,
+   "summerCutKw": 4,
+   "effektKr": 3783,
+   "effektMin": 3357,
+   "effektMax": 4881,
+   "energyKr": 18117,
    "months": [
     {
      "month": "2025-11",
@@ -30,55 +30,55 @@
      "month": "2025-12",
      "cutKw": 0.2,
      "minKw": 0,
-     "maxKw": 0.7
+     "maxKw": 0.6
     },
     {
      "month": "2026-01",
-     "cutKw": 1.1,
+     "cutKw": 1,
      "minKw": 0.5,
-     "maxKw": 2.1
+     "maxKw": 2
     },
     {
      "month": "2026-02",
-     "cutKw": 1.5,
-     "minKw": 0.3,
-     "maxKw": 2.8
+     "cutKw": 1.1,
+     "minKw": 0.2,
+     "maxKw": 2
     },
     {
      "month": "2026-03",
-     "cutKw": 2.3,
-     "minKw": 2.2,
+     "cutKw": 2.1,
+     "minKw": 1.7,
      "maxKw": 2.5
     },
     {
      "month": "2026-04",
-     "cutKw": 6.4,
-     "minKw": 3.3,
-     "maxKw": 8.3
+     "cutKw": 4.5,
+     "minKw": 2.5,
+     "maxKw": 5.7
     },
     {
      "month": "2026-05",
-     "cutKw": 1.7,
-     "minKw": 0.9,
-     "maxKw": 2.6
+     "cutKw": 1.6,
+     "minKw": 0.8,
+     "maxKw": 2.5
     },
     {
      "month": "2026-06",
-     "cutKw": 8.8,
-     "minKw": 4,
-     "maxKw": 11.6
+     "cutKw": 7.3,
+     "minKw": 3.2,
+     "maxKw": 9.2
     },
     {
      "month": "2026-07",
-     "cutKw": 5.9,
-     "minKw": 2.7,
-     "maxKw": 9.9
+     "cutKw": 5.1,
+     "minKw": 2.2,
+     "maxKw": 8.5
     },
     {
      "month": "2026-08",
-     "cutKw": 6.3,
-     "minKw": 2.6,
-     "maxKw": 9.3
+     "cutKw": 5.2,
+     "minKw": 2.3,
+     "maxKw": 7.4
     },
     {
      "month": "2026-09",
@@ -88,17 +88,17 @@
     },
     {
      "month": "2026-10",
-     "cutKw": 2.4,
-     "minKw": 0.6,
-     "maxKw": 4.8
+     "cutKw": 2,
+     "minKw": 0.5,
+     "maxKw": 3.5
     }
    ],
    "actual": {
-    "kwh": 17491,
+    "kwh": 14293,
     "onSite": 1,
-    "summerCutKw": 5.3,
-    "effektKr": 5579,
-    "energyKr": 22880
+    "summerCutKw": 4.4,
+    "effektKr": 4631,
+    "energyKr": 18626
    }
   },
   {
@@ -199,14 +199,14 @@
    "keys": [
     "gamla"
    ],
-   "kwp": 9.46,
-   "kwh": 9466,
+   "kwp": 9.03,
+   "kwh": 9036,
    "onSite": 1,
-   "summerCutKw": 2.5,
-   "effektKr": 2568,
-   "effektMin": 2016,
-   "effektMax": 3354,
-   "energyKr": 11827,
+   "summerCutKw": 2.4,
+   "effektKr": 2464,
+   "effektMin": 1930,
+   "effektMax": 3225,
+   "energyKr": 11289,
    "months": [
     {
      "month": "2025-11",
@@ -222,27 +222,27 @@
     },
     {
      "month": "2026-01",
-     "cutKw": 1.4,
+     "cutKw": 1.3,
      "minKw": 0.4,
-     "maxKw": 4.9
+     "maxKw": 4.7
     },
     {
      "month": "2026-02",
      "cutKw": 0.9,
      "minKw": 0.1,
-     "maxKw": 1.9
+     "maxKw": 1.8
     },
     {
      "month": "2026-03",
      "cutKw": 1.3,
      "minKw": 0.9,
-     "maxKw": 2.4
+     "maxKw": 2.3
     },
     {
      "month": "2026-04",
-     "cutKw": 2.6,
-     "minKw": 1.4,
-     "maxKw": 3.4
+     "cutKw": 2.5,
+     "minKw": 1.3,
+     "maxKw": 3.2
     },
     {
      "month": "2026-05",
@@ -252,21 +252,21 @@
     },
     {
      "month": "2026-06",
-     "cutKw": 5,
-     "minKw": 1.7,
-     "maxKw": 6.7
+     "cutKw": 4.8,
+     "minKw": 1.6,
+     "maxKw": 6.4
     },
     {
      "month": "2026-07",
-     "cutKw": 3.5,
+     "cutKw": 3.3,
      "minKw": 1.1,
-     "maxKw": 6.1
+     "maxKw": 5.8
     },
     {
      "month": "2026-08",
-     "cutKw": 3.5,
+     "cutKw": 3.4,
      "minKw": 1.2,
-     "maxKw": 5.7
+     "maxKw": 5.6
     },
     {
      "month": "2026-09",
@@ -277,30 +277,30 @@
     {
      "month": "2026-10",
      "cutKw": 1.4,
-     "minKw": 0.3,
-     "maxKw": 2.8
+     "minKw": 0.2,
+     "maxKw": 2.7
     }
    ],
    "actual": {
-    "kwh": 9610,
+    "kwh": 9173,
     "onSite": 1,
-    "summerCutKw": 2.9,
-    "effektKr": 3409,
-    "energyKr": 12172
+    "summerCutKw": 2.8,
+    "effektKr": 3293,
+    "energyKr": 11619
    }
   },
   {
    "keys": [
     "ladan"
    ],
-   "kwp": 90.3,
-   "kwh": 67902,
-   "onSite": 0.767,
+   "kwp": 89.87,
+   "kwh": 67590,
+   "onSite": 0.769,
    "summerCutKw": 9.6,
-   "effektKr": 9328,
-   "effektMin": 6938,
-   "effektMax": 10985,
-   "energyKr": 80249,
+   "effektKr": 9313,
+   "effektMin": 6929,
+   "effektMax": 10970,
+   "energyKr": 79960,
    "months": [
     {
      "month": "2025-11",
@@ -322,7 +322,7 @@
     },
     {
      "month": "2026-02",
-     "cutKw": 5.5,
+     "cutKw": 5.4,
      "minKw": 1,
      "maxKw": 8.4
     },
@@ -334,15 +334,15 @@
     },
     {
      "month": "2026-04",
-     "cutKw": 13.8,
+     "cutKw": 13.7,
      "minKw": 12.1,
      "maxKw": 14.8
     },
     {
      "month": "2026-05",
-     "cutKw": 5.5,
+     "cutKw": 5.4,
      "minKw": 1.5,
-     "maxKw": 11.4
+     "maxKw": 11.3
     },
     {
      "month": "2026-06",
@@ -370,91 +370,91 @@
     },
     {
      "month": "2026-10",
-     "cutKw": 6,
+     "cutKw": 5.9,
      "minKw": 2.3,
-     "maxKw": 9.7
+     "maxKw": 9.6
     }
    ],
    "actual": {
-    "kwh": 69373,
-    "onSite": 0.817,
+    "kwh": 69051,
+    "onSite": 0.819,
     "summerCutKw": 10,
-    "effektKr": 10348,
-    "energyKr": 84414
+    "effektKr": 10336,
+    "energyKr": 84101
    }
   },
   {
    "keys": [
     "restaurang"
    ],
-   "kwp": 4.3,
-   "kwh": 3960,
+   "kwp": 3.44,
+   "kwh": 3178,
    "onSite": 1,
-   "summerCutKw": 1.2,
-   "effektKr": 1164,
-   "effektMin": 955,
-   "effektMax": 1440,
-   "energyKr": 4961,
+   "summerCutKw": 1,
+   "effektKr": 961,
+   "effektMin": 776,
+   "effektMax": 1168,
+   "energyKr": 3979,
    "months": [
     {
      "month": "2025-11",
-     "cutKw": 0.2,
+     "cutKw": 0.1,
      "minKw": 0,
-     "maxKw": 0.5
+     "maxKw": 0.4
     },
     {
      "month": "2025-12",
-     "cutKw": 0.1,
+     "cutKw": 0,
      "minKw": 0,
      "maxKw": 0.2
     },
     {
      "month": "2026-01",
-     "cutKw": 0.5,
-     "minKw": 0.2,
-     "maxKw": 1.3
+     "cutKw": 0.4,
+     "minKw": 0.1,
+     "maxKw": 1
     },
     {
      "month": "2026-02",
-     "cutKw": 0.3,
-     "minKw": 0.1,
+     "cutKw": 0.2,
+     "minKw": 0,
      "maxKw": 0.4
     },
     {
      "month": "2026-03",
-     "cutKw": 0.8,
+     "cutKw": 0.7,
      "minKw": 0.4,
-     "maxKw": 1.9
+     "maxKw": 1.8
     },
     {
      "month": "2026-04",
-     "cutKw": 0.9,
-     "minKw": 0.6,
-     "maxKw": 1
+     "cutKw": 0.7,
+     "minKw": 0.5,
+     "maxKw": 0.9
     },
     {
      "month": "2026-05",
-     "cutKw": 0.7,
+     "cutKw": 0.5,
      "minKw": 0.2,
-     "maxKw": 1
+     "maxKw": 0.8
     },
     {
      "month": "2026-06",
-     "cutKw": 2.2,
-     "minKw": 0.8,
-     "maxKw": 2.8
+     "cutKw": 1.7,
+     "minKw": 0.7,
+     "maxKw": 2.3
     },
     {
      "month": "2026-07",
-     "cutKw": 1.8,
-     "minKw": 0.6,
-     "maxKw": 2.6
+     "cutKw": 1.5,
+     "minKw": 0.4,
+     "maxKw": 2.3
     },
     {
      "month": "2026-08",
-     "cutKw": 1.6,
-     "minKw": 0.6,
-     "maxKw": 2.7
+     "cutKw": 1.3,
+     "minKw": 0.5,
+     "maxKw": 2.2
     },
     {
      "month": "2026-09",
@@ -464,17 +464,17 @@
     },
     {
      "month": "2026-10",
-     "cutKw": 0.5,
+     "cutKw": 0.4,
      "minKw": 0.1,
-     "maxKw": 1
+     "maxKw": 0.8
     }
    ],
    "actual": {
-    "kwh": 4046,
+    "kwh": 3245,
     "onSite": 1,
-    "summerCutKw": 1.3,
-    "effektKr": 1547,
-    "energyKr": 5122
+    "summerCutKw": 1.1,
+    "effektKr": 1263,
+    "energyKr": 4109
    }
   },
   {
@@ -482,14 +482,14 @@
     "kansli",
     "studio"
    ],
-   "kwp": 32.68,
-   "kwh": 24652,
-   "onSite": 0.995,
-   "summerCutKw": 6.3,
-   "effektKr": 5891,
-   "effektMin": 4745,
-   "effektMax": 7445,
-   "energyKr": 31439,
+   "kwp": 28.38,
+   "kwh": 21486,
+   "onSite": 0.997,
+   "summerCutKw": 5.6,
+   "effektKr": 5280,
+   "effektMin": 4227,
+   "effektMax": 6673,
+   "energyKr": 27362,
    "months": [
     {
      "month": "2025-11",
@@ -501,19 +501,19 @@
      "month": "2025-12",
      "cutKw": 0.2,
      "minKw": 0,
-     "maxKw": 0.9
+     "maxKw": 0.8
     },
     {
      "month": "2026-01",
-     "cutKw": 1.4,
+     "cutKw": 1.3,
      "minKw": 0.6,
-     "maxKw": 2.5
+     "maxKw": 2.4
     },
     {
      "month": "2026-02",
-     "cutKw": 2,
+     "cutKw": 1.6,
      "minKw": 0.4,
-     "maxKw": 3.3
+     "maxKw": 2.5
     },
     {
      "month": "2026-03",
@@ -523,32 +523,32 @@
     },
     {
      "month": "2026-04",
-     "cutKw": 8.8,
-     "minKw": 4.9,
-     "maxKw": 11.1
+     "cutKw": 6.9,
+     "minKw": 4.1,
+     "maxKw": 8.5
     },
     {
      "month": "2026-05",
-     "cutKw": 2.1,
-     "minKw": 1.4,
-     "maxKw": 3.2
+     "cutKw": 2,
+     "minKw": 1.2,
+     "maxKw": 2.9
     },
     {
      "month": "2026-06",
-     "cutKw": 12.2,
-     "minKw": 6.1,
-     "maxKw": 17.4
+     "cutKw": 10.8,
+     "minKw": 5.3,
+     "maxKw": 14.9
     },
     {
      "month": "2026-07",
-     "cutKw": 7,
-     "minKw": 4.1,
+     "cutKw": 6.7,
+     "minKw": 3.6,
      "maxKw": 10.9
     },
     {
      "month": "2026-08",
-     "cutKw": 7.6,
-     "minKw": 3.2,
+     "cutKw": 7.4,
+     "minKw": 3,
      "maxKw": 10.6
     },
     {
@@ -559,17 +559,17 @@
     },
     {
      "month": "2026-10",
-     "cutKw": 3.4,
-     "minKw": 0.9,
-     "maxKw": 6.5
+     "cutKw": 2.9,
+     "minKw": 0.8,
+     "maxKw": 5.3
     }
    ],
    "actual": {
-    "kwh": 25183,
-    "onSite": 0.996,
-    "summerCutKw": 7.4,
-    "effektKr": 7381,
-    "energyKr": 32591
+    "kwh": 21985,
+    "onSite": 0.998,
+    "summerCutKw": 6.8,
+    "effektKr": 6755,
+    "energyKr": 28366
    }
   },
   {
@@ -578,14 +578,14 @@
     "studio",
     "gamla"
    ],
-   "kwp": 42.14,
-   "kwh": 34118,
-   "onSite": 0.964,
-   "summerCutKw": 7.3,
-   "effektKr": 6993,
-   "effektMin": 5582,
-   "effektMax": 8663,
-   "energyKr": 42636,
+   "kwp": 37.41,
+   "kwh": 30522,
+   "onSite": 0.974,
+   "summerCutKw": 6.7,
+   "effektKr": 6463,
+   "effektMin": 5047,
+   "effektMax": 7904,
+   "energyKr": 38230,
    "months": [
     {
      "month": "2025-11",
@@ -597,19 +597,19 @@
      "month": "2025-12",
      "cutKw": 0.4,
      "minKw": 0,
-     "maxKw": 1.6
+     "maxKw": 1.5
     },
     {
      "month": "2026-01",
-     "cutKw": 2.6,
+     "cutKw": 2.4,
      "minKw": 0.6,
-     "maxKw": 7.4
+     "maxKw": 6.8
     },
     {
      "month": "2026-02",
-     "cutKw": 2.9,
+     "cutKw": 2.4,
      "minKw": 0.5,
-     "maxKw": 5.1
+     "maxKw": 4.3
     },
     {
      "month": "2026-03",
@@ -619,32 +619,32 @@
     },
     {
      "month": "2026-04",
-     "cutKw": 11.3,
-     "minKw": 6.2,
-     "maxKw": 14.5
+     "cutKw": 9.4,
+     "minKw": 5.4,
+     "maxKw": 11.7
     },
     {
      "month": "2026-05",
-     "cutKw": 2.3,
-     "minKw": 1.5,
-     "maxKw": 3.7
+     "cutKw": 2.2,
+     "minKw": 1.4,
+     "maxKw": 3.5
     },
     {
      "month": "2026-06",
-     "cutKw": 14.6,
-     "minKw": 7.8,
-     "maxKw": 21.4
+     "cutKw": 13.8,
+     "minKw": 6.9,
+     "maxKw": 20.4
     },
     {
      "month": "2026-07",
-     "cutKw": 7.6,
-     "minKw": 4.8,
+     "cutKw": 7.3,
+     "minKw": 4.5,
      "maxKw": 10.9
     },
     {
      "month": "2026-08",
-     "cutKw": 8,
-     "minKw": 3.7,
+     "cutKw": 7.8,
+     "minKw": 3.4,
      "maxKw": 10.7
     },
     {
@@ -655,17 +655,17 @@
     },
     {
      "month": "2026-10",
-     "cutKw": 3.9,
-     "minKw": 1.2,
+     "cutKw": 3.7,
+     "minKw": 1,
      "maxKw": 6.9
     }
    ],
    "actual": {
-    "kwh": 34793,
-    "onSite": 0.975,
-    "summerCutKw": 8.3,
-    "effektKr": 8500,
-    "energyKr": 44336
+    "kwh": 31158,
+    "onSite": 0.982,
+    "summerCutKw": 8.2,
+    "effektKr": 8193,
+    "energyKr": 39701
    }
   },
   {
@@ -676,14 +676,14 @@
     "ladan",
     "restaurang"
    ],
-   "kwp": 136.74,
-   "kwh": 105980,
-   "onSite": 0.574,
+   "kwp": 130.72,
+   "kwh": 101291,
+   "onSite": 0.593,
    "summerCutKw": 10.2,
-   "effektKr": 10291,
-   "effektMin": 8054,
-   "effektMax": 11867,
-   "energyKr": 111271,
+   "effektKr": 10199,
+   "effektMin": 7917,
+   "effektMax": 11803,
+   "energyKr": 107618,
    "months": [
     {
      "month": "2025-11",
@@ -699,14 +699,14 @@
     },
     {
      "month": "2026-01",
-     "cutKw": 4.3,
+     "cutKw": 4.2,
      "minKw": 1,
      "maxKw": 7.8
     },
     {
      "month": "2026-02",
-     "cutKw": 6.9,
-     "minKw": 1.6,
+     "cutKw": 6.7,
+     "minKw": 1.5,
      "maxKw": 8.9
     },
     {
@@ -717,32 +717,32 @@
     },
     {
      "month": "2026-04",
-     "cutKw": 14.6,
-     "minKw": 13.8,
+     "cutKw": 14.5,
+     "minKw": 13.5,
      "maxKw": 14.8
     },
     {
      "month": "2026-05",
-     "cutKw": 6.5,
+     "cutKw": 6.4,
      "minKw": 1.6,
      "maxKw": 12.5
     },
     {
      "month": "2026-06",
-     "cutKw": 18.8,
+     "cutKw": 18.7,
      "minKw": 9.2,
      "maxKw": 21.4
     },
     {
      "month": "2026-07",
-     "cutKw": 10.5,
+     "cutKw": 10.4,
      "minKw": 9.3,
      "maxKw": 10.9
     },
     {
      "month": "2026-08",
      "cutKw": 11,
-     "minKw": 8.3,
+     "minKw": 8,
      "maxKw": 12.8
     },
     {
@@ -754,16 +754,16 @@
     {
      "month": "2026-10",
      "cutKw": 6.9,
-     "minKw": 3.6,
+     "minKw": 3.4,
      "maxKw": 10.8
     }
    ],
    "actual": {
-    "kwh": 108212,
-    "onSite": 0.63,
+    "kwh": 103454,
+    "onSite": 0.649,
     "summerCutKw": 10.8,
-    "effektKr": 11451,
-    "energyKr": 118468
+    "effektKr": 11371,
+    "energyKr": 114437
    }
   }
  ]

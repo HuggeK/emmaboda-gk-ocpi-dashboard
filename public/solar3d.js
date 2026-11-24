@@ -16,8 +16,67 @@ const COLORS = {
   wall: 0xe9e7e1,
   panel: 0x0d2a52,
   panelEdge: 0x9ec5f4,
+  frame: 0xb8bcc2, // the panel's aluminium frame
+  rail: 0x8d939b, // mounting rails
   ground: 0xcfd8c4,
 };
+
+// ---- the sun ------------------------------------------------------------------
+// The club, for the sun's position (WGS 84).
+const LAT = 56.53;
+const LON = 15.58;
+const RAD = Math.PI / 180;
+const SKY_R = 55; // m: radius of the sky dome the sun paths are drawn on (around the buildings)
+export const SUN_DAYS = [
+  { key: 'summer', label: '21 Jun', month: 6, day: 21, color: 0xf5b700 },
+  { key: 'equinox', label: '20 Mar / 23 Sep', month: 3, day: 20, color: 0xd97706 },
+  { key: 'winter', label: '21 Dec', month: 12, day: 21, color: 0x92400e },
+];
+
+// Swedish time's offset from UTC on a date (hours): +2 from the last Sunday
+// of March to the last Sunday of October, else +1.
+function swedenOffset(y, m, d) {
+  const lastSunday = (month) => {
+    const last = new Date(Date.UTC(y, month, 0));
+    return last.getUTCDate() - last.getUTCDay();
+  };
+  const md = m * 100 + d;
+  return md >= 300 + lastSunday(3) && md < 1000 + lastSunday(10) ? 2 : 1;
+}
+
+// The instant of a Swedish wall-clock time (hours may be fractional).
+export function swedishInstant(y, m, d, hours) {
+  return Date.UTC(y, m - 1, d) + (hours - swedenOffset(y, m, d)) * 3_600_000;
+}
+
+// Sun elevation and azimuth (deg; azimuth from north, clockwise) at an
+// instant, NOAA's approximation (as in tools/roof-solar/simulate.mjs).
+export function sunPosition(t) {
+  const d = new Date(t);
+  const doy = (Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - Date.UTC(d.getUTCFullYear(), 0, 0)) / 864e5;
+  const hr = d.getUTCHours() + d.getUTCMinutes() / 60 + d.getUTCSeconds() / 3600;
+  const g = (2 * Math.PI / 365) * (doy - 1 + (hr - 12) / 24);
+  const eqt = 229.18 * (0.000075 + 0.001868 * Math.cos(g) - 0.032077 * Math.sin(g) - 0.014615 * Math.cos(2 * g) - 0.040849 * Math.sin(2 * g));
+  const decl = 0.006918 - 0.399912 * Math.cos(g) + 0.070257 * Math.sin(g) - 0.006758 * Math.cos(2 * g) + 0.000907 * Math.sin(2 * g) - 0.002697 * Math.cos(3 * g) + 0.00148 * Math.sin(3 * g);
+  const ha = ((hr * 60 + eqt + 4 * LON) / 4 - 180) * RAD;
+  const la = LAT * RAD;
+  const sinEl = Math.sin(la) * Math.sin(decl) + Math.cos(la) * Math.cos(decl) * Math.cos(ha);
+  const el = Math.asin(sinEl);
+  const cosAz = (Math.sin(decl) - Math.sin(la) * sinEl) / (Math.cos(la) * Math.cos(el));
+  let az = Math.acos(Math.max(-1, Math.min(1, cosAz))) / RAD;
+  if (ha > 0) az = 360 - az;
+  return { el: el / RAD, az };
+}
+
+// Scene direction towards the sun: x east, y up, z south.
+function sunVector(el, az) {
+  return new THREE.Vector3(Math.sin(az * RAD) * Math.cos(el * RAD), Math.sin(el * RAD), -Math.cos(az * RAD) * Math.cos(el * RAD));
+}
+
+// Mounting as on a real roof: rails hold the panels this far above the roof
+// surface (m), and a panel with its frame is this thick.
+const PANEL_GAP = 0.15;
+const PANEL_THICK = 0.04;
 
 export function faceKind(f) {
   if (f.flat) return 'flat';
@@ -117,7 +176,8 @@ function buildingGroup(b, e0, n0) {
   shell.receiveShadow = true;
   group.add(shell);
 
-  // Panels: quads 8 cm above the roof surface, following its slope.
+  // Panels as mounted on a roof: on two aluminium rails running along the
+  // roof, PANEL_GAP above the surface, PANEL_THICK thick, following its slope.
   const surface = (cx, cy) => {
     // Bilinear height at a point given in cell units (x = column, y = row).
     const c = Math.min(Math.max(cx, 0), W);
@@ -129,20 +189,45 @@ function buildingGroup(b, e0, n0) {
     return (corner(r0, c0) * (1 - fc) + corner(r0, c0 + 1) * fc) * (1 - fr) + (corner(r0 + 1, c0) * (1 - fc) + corner(r0 + 1, c0 + 1) * fc) * fr;
   };
   const panelPos = [];
+  const sidePos = [];
+  const railPos = [];
   const edgePos = [];
+  const quad = (arr, a, b2, c, d) => arr.push(...a, ...b2, ...c, ...a, ...c, ...d);
+  const lerp = (p, q, t) => [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+  const at = ([cx, cy], up) => [X(cx), surface(cx, cy) + up, Z(cy)];
   for (const f of b.faces) {
     for (const poly of f.panel_polygons) {
-      const pts = poly.map(([cx, cy]) => [X(cx), surface(cx, cy) + 0.08, Z(cy)]);
-      panelPos.push(...pts[0], ...pts[1], ...pts[2], ...pts[0], ...pts[2], ...pts[3]);
-      for (let i = 0; i < 4; i += 1) edgePos.push(...pts[i], ...pts[(i + 1) % 4]);
+      // Corners in cell units: 0→1 along the roof (contour), 1→2 up the slope.
+      const top = poly.map((p) => at(p, PANEL_GAP + PANEL_THICK));
+      const bottom = poly.map((p) => at(p, PANEL_GAP));
+      quad(panelPos, top[0], top[1], top[2], top[3]);
+      for (let i = 0; i < 4; i += 1) {
+        const j = (i + 1) % 4;
+        quad(sidePos, bottom[i], bottom[j], top[j], top[i]);
+        edgePos.push(...top[i], ...top[j]);
+      }
+      // Two rails under the panel, at a quarter and three quarters up it,
+      // standing on the roof (a strip from the roof up to the panel).
+      for (const t of [0.25, 0.75]) {
+        const a = lerp(poly[0], poly[3], t);
+        const c = lerp(poly[1], poly[2], t);
+        quad(railPos, at(a, 0.02), at(c, 0.02), at(c, PANEL_GAP), at(a, PANEL_GAP));
+      }
     }
   }
   const panels = new THREE.Group();
+  const mesh = (pos, material) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.computeVertexNormals();
+    const m = new THREE.Mesh(g, material);
+    m.castShadow = true;
+    return m;
+  };
   if (panelPos.length) {
-    const pg = new THREE.BufferGeometry();
-    pg.setAttribute('position', new THREE.Float32BufferAttribute(panelPos, 3));
-    pg.computeVertexNormals();
-    panels.add(new THREE.Mesh(pg, new THREE.MeshStandardMaterial({ color: COLORS.panel, roughness: 0.3, metalness: 0.4, side: THREE.DoubleSide })));
+    panels.add(mesh(panelPos, new THREE.MeshStandardMaterial({ color: COLORS.panel, roughness: 0.3, metalness: 0.4, side: THREE.DoubleSide })));
+    panels.add(mesh(sidePos, new THREE.MeshStandardMaterial({ color: COLORS.frame, roughness: 0.5, metalness: 0.6, side: THREE.DoubleSide })));
+    panels.add(mesh(railPos, new THREE.MeshStandardMaterial({ color: COLORS.rail, roughness: 0.5, metalness: 0.7, side: THREE.DoubleSide })));
     const eg = new THREE.BufferGeometry();
     eg.setAttribute('position', new THREE.Float32BufferAttribute(edgePos, 3));
     panels.add(new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color: COLORS.panelEdge })));
@@ -152,7 +237,7 @@ function buildingGroup(b, e0, n0) {
   return group;
 }
 
-function label(text) {
+function label(text, scale = 1) {
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
   ctx.font = '600 28px system-ui, sans-serif';
@@ -165,7 +250,7 @@ function label(text) {
   ctx.fillStyle = '#0b0b0b';
   ctx.fillText(text, 12, 31);
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false }));
-  sprite.scale.set(w / 12, 44 / 12, 1);
+  sprite.scale.set((w / 12) * scale, (44 / 12) * scale, 1);
   return sprite;
 }
 
@@ -191,6 +276,57 @@ export function mountSolar3d(container, data, selected) {
   sun.shadow.mapSize.set(2048, 2048);
   Object.assign(sun.shadow.camera, { left: -90, right: 90, top: 90, bottom: -90, near: 1, far: 300 });
   scene.add(sun);
+  scene.add(sun.target);
+
+  // The sun's paths over the site on three days, with a mark every hour
+  // (Swedish time), drawn on a dome around the buildings.
+  const year = new Date().getFullYear();
+  const hourLabels = [];
+  for (const day of SUN_DAYS) {
+    const pts = [];
+    for (let h = 0; h <= 24; h += 1 / 6) {
+      const p = sunPosition(swedishInstant(year, day.month, day.day, h));
+      if (p.el > -1) pts.push(sunVector(Math.max(p.el, 0), p.az).multiplyScalar(SKY_R));
+    }
+    const path = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: day.color, transparent: true, opacity: 0.9 }));
+    scene.add(path);
+    for (let h = 1; h < 24; h += 1) {
+      const p = sunPosition(swedishInstant(year, day.month, day.day, h));
+      if (p.el <= 0) continue;
+      const dot = new THREE.Mesh(new THREE.SphereGeometry(0.7, 10, 8), new THREE.MeshBasicMaterial({ color: day.color }));
+      dot.position.copy(sunVector(p.el, p.az).multiplyScalar(SKY_R));
+      scene.add(dot);
+      if (day.key === 'summer' && h % 3 === 0) {
+        const tag = label(`${String(h).padStart(2, '0')}:00`, 0.9);
+        tag.position.copy(dot.position).add(new THREE.Vector3(0, 3, 0));
+        scene.add(tag);
+        hourLabels.push(tag);
+      }
+    }
+    const noon = sunPosition(swedishInstant(year, day.month, day.day, day.month >= 4 && day.month <= 9 ? 13 : 12));
+    const name = label(day.label, 1);
+    name.position.copy(sunVector(noon.el, noon.az).multiplyScalar(SKY_R)).add(new THREE.Vector3(0, -4, 0));
+    scene.add(name);
+  }
+  // The sun itself, moved by setSun().
+  const sunBall = new THREE.Mesh(new THREE.SphereGeometry(2.4, 20, 14), new THREE.MeshBasicMaterial({ color: 0xffd34d }));
+  scene.add(sunBall);
+  const hemi = scene.children.find((c) => c.isHemisphereLight);
+
+  // Moves the sun (and its light and shadows) to a Swedish date and time.
+  // Returns its elevation and azimuth.
+  function setSun(month, day, hours) {
+    const p = sunPosition(swedishInstant(year, month, day, hours));
+    const v = sunVector(Math.max(p.el, -2), p.az);
+    sunBall.position.copy(v).multiplyScalar(SKY_R);
+    sunBall.visible = p.el > -1;
+    sun.position.copy(v).multiplyScalar(150);
+    sun.target.position.set(0, 0, 0);
+    const up = Math.max(0, Math.min(1, p.el / 15)); // fades in over the first 15° above the horizon
+    sun.intensity = 2.4 * up;
+    if (hemi) hemi.intensity = 0.6 + 0.8 * up;
+    return p;
+  }
 
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshStandardMaterial({ color: COLORS.ground, roughness: 1 }));
   ground.rotation.x = -Math.PI / 2;
@@ -235,7 +371,7 @@ export function mountSolar3d(container, data, selected) {
     }
     if (n) focus.divideScalar(n);
     controls.target.copy(focus);
-    camera.position.copy(focus).add(new THREE.Vector3(35, 45, 70)); // from the south-east, above
+    camera.position.copy(focus).add(new THREE.Vector3(60, 95, 150)); // from the south-east, high, with the sun paths in view
     controls.update();
   }
 
@@ -268,5 +404,6 @@ export function mountSolar3d(container, data, selected) {
     controls.dispose();
     renderer.dispose();
   }
-  return { select, dispose };
+  setSun(6, 21, 13);
+  return { select, dispose, setSun };
 }

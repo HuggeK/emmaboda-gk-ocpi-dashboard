@@ -40,6 +40,11 @@ PANEL_W = 1.134  # m, along the roof's contour (portrait)
 PANEL_H = 1.762  # m, up the slope
 PANEL_WP = 430  # W per panel
 SETBACK = 0.5  # m from roof edges
+BUMP_TOL = 0.5  # m off the roof face's plane: a dormer, bulge or chimney there gets no panels
+BUMP_MIN_M2 = 2.0  # ...when the cells off the plane form a patch at least this big (smaller ones are laser noise)
+# Tuned on the club's roofs (about 1.2 laser points/m²): 0.5 m / 2 m² finds the
+# bulge on the office building's east roof and nothing else; 0.3 m also marks
+# laser noise on the barn and the office building.
 FLAT_TILT = 10  # deg, east–west racks on flat roofs
 FLAT_LIMIT = 8  # deg: flatter than this is a flat roof
 MIN_YIELD = 650  # kWh per kWp and year: below this (north faces) no panels are placed
@@ -223,9 +228,41 @@ def faces_of(z, px, mask, axis=None):
     return faces
 
 
+def obstacles(z, px, mask, tol=BUMP_TOL):
+    """Cells of a roof face that stand out from its plane: dormers, bulges,
+    chimneys, vents. A plane is fitted to the face's heights (twice, the
+    second time without the cells the first fit left more than `tol` off), and
+    cells more than `tol` above or below it are candidates. Only connected
+    patches of at least BUMP_MIN_M2 count (sparse laser points leave scattered
+    single cells off the plane; a real bulge is a block); they get a margin of
+    one cell."""
+    rr, cc = np.nonzero(mask & np.isfinite(z))
+    if len(rr) < 12:
+        return np.zeros_like(mask)
+    zz = z[rr, cc]
+    keep = np.ones(len(rr), bool)
+    for _ in range(3):
+        a = np.column_stack([cc[keep] * px, rr[keep] * px, np.ones(keep.sum())])
+        coef, *_ = np.linalg.lstsq(a, zz[keep], rcond=None)
+        res = zz - (cc * px * coef[0] + rr * px * coef[1] + coef[2])
+        keep = np.abs(res) <= tol
+    off = np.zeros_like(mask)
+    off[rr[~keep], cc[~keep]] = True
+    labels, count = ndimage.label(off)  # edge neighbours only: diagonal noise does not join up
+    if count:
+        sizes = ndimage.sum(off, labels, range(1, count + 1))
+        big = np.isin(labels, 1 + np.nonzero(sizes * px * px >= BUMP_MIN_M2)[0])
+    else:
+        big = off
+    return big & mask  # every cell under a panel is checked, so no extra margin is needed
+
+
 def layout(face, px):
-    """Panel rectangles (corner cells) inside the face, 0.5 m from its edges."""
+    """Panel rectangles (corner cells) inside the face, 0.5 m from its edges
+    and clear of anything standing out of the roof plane."""
     usable = ndimage.binary_erosion(face["mask"], iterations=max(1, int(round(SETBACK / px))))
+    if face.get("obstacles") is not None:
+        usable &= ~face["obstacles"]
     if not usable.any():
         return usable, []
     rows, cols = np.nonzero(usable)
@@ -264,6 +301,10 @@ def layout(face, px):
                 # border would otherwise round to the wrong side.
                 e = 0.1
                 corners = [(uu + e, vv + e), (uu + w - e, vv + e), (uu + e, vv + h - e), (uu + w - e, vv + h - e), (uu + w / 2, vv + h / 2)]
+                # Every cell under the panel, not only its corners: an obstacle
+                # can sit between them.
+                nu, nv = max(2, int(math.ceil(w / (px / 2)))), max(2, int(math.ceil(h / (px / 2))))
+                corners += [(uu + e + (w - 2 * e) * i / nu, vv + e + (h - 2 * e) * j / nv) for i in range(nu + 1) for j in range(nv + 1)]
                 pts = []
                 for cu, cv in corners:
                     y = cu * across[0] + cv * up[0]
@@ -376,6 +417,7 @@ def analyse(ds, b, buildings=None, ortho=None):
             f["mask"] = inside & (nearest == i + 1)
     out_faces = []
     for i, f in enumerate(faces):
+        f["obstacles"] = obstacles(zc, px, f["mask"])
         usable, panels = layout(f, px)
         y = yield_per_kwp(f["tilt"], f["azimuth"], f["flat"]) if panels else 0
         worth = y >= MIN_YIELD
@@ -393,6 +435,7 @@ def analyse(ds, b, buildings=None, ortho=None):
             "direction": "flat (east–west racks)" if f["flat"] else compass(f["azimuth"]),
             "area_m2": round(float(f["mask"].sum() * px * px / (1 if f["flat"] else math.cos(math.radians(f["roof_tilt"])))), 1),
             "usable_m2": round(float(usable.sum() * px * px / (1 if f["flat"] else math.cos(math.radians(f["roof_tilt"])))), 1),
+            "obstacle_m2": round(float(f["obstacles"].sum() * px * px), 1),
             "panels": n,
             "kwp": round(kwp, 2),
             "kwh_per_kwp": round(y),

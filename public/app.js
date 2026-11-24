@@ -2238,6 +2238,12 @@ function drawPriceLadder(container, acc, price) {
 // (tools/roof-solar → data/solar-roofs.json), a 3D model of the panels that
 // fit, and the value worked out on the club's own consumption.
 const SUGGESTED_ROOFS = ['kansli', 'studio']; // at the kanslipunkt, with capacity back to the meter
+// The days whose sun path the 3D model draws (colours as in solar3d.js's SUN_DAYS).
+const SUN_DAY_CHOICES = [
+  { key: 'summer', label: '21 Jun', month: 6, day: 21, color: '#f5b700' },
+  { key: 'equinox', label: '20 Mar / 23 Sep', month: 3, day: 20, color: '#d97706' },
+  { key: 'winter', label: '21 Dec', month: 12, day: 21, color: '#92400e' },
+];
 
 // Value a year of a system of kwp producing kwh: the energy it replaces on
 // site (exported above the simulated on-site share earns spot only, roughly
@@ -2362,7 +2368,7 @@ function roofWorkHtml(buildings, valueOf) {
 
 async function renderSolar() {
   const root = $('#view-solar');
-  state.solar ||= { show: 'suggested', data: null, view: null };
+  state.solar ||= { show: 'suggested', data: null, view: null, sunDay: 'summer', sunHour: 13 };
   const s = state.solar;
   if (!s.data) {
     root.innerHTML = '<div class="loading">Loading the roof model...</div>';
@@ -2427,6 +2433,13 @@ async function renderSolar() {
         <span><i class="swatch" style="background:#0d2a52"></i>Panel</span>
         <span class="subtle">Drag to turn, scroll or pinch to zoom.</span>
       </div>
+      <div class="filters solar-sun" id="solar-sun">
+        <span class="subtle">Sun path:</span>
+        ${SUN_DAY_CHOICES.map((d) => `<button class="chip ${s.sunDay === d.key ? 'active' : ''}" data-sun-day="${d.key}"><i class="swatch" style="background:${d.color}"></i>${esc(d.label)}</button>`).join('')}
+        <label class="sun-time">Time <input type="range" id="solar-sun-time" min="3" max="23" step="0.25" value="${s.sunHour}"> <span id="solar-sun-clock" class="mono"></span></label>
+        <button id="solar-sun-play" title="Run through the day">▶ Day</button>
+        <span id="solar-sun-readout" class="subtle"></span>
+      </div>
     </div>
     <div class="card">
       <div class="card-head"><h3>Per building</h3><span class="subtle">${fmtNum(s.data.panel.wp, 0)} Wp panels, ${fmtNum(s.data.panel.w, 2)} × ${fmtNum(s.data.panel.h, 2)} m, ${fmtNum(s.data.panel.setback_m, 1)} m from the roof edges</span></div>
@@ -2478,9 +2491,56 @@ async function renderSolar() {
     const { mountSolar3d } = await import('./solar3d.js');
     s.view?.dispose();
     s.view = mountSolar3d($('#solar-3d'), s.data, new Set(s.show === 'all' ? buildings.map((b) => b.key) : SUGGESTED_ROOFS));
+    bindSunControls(s);
   } catch (err) {
     $('#solar-3d').innerHTML = `<div class="notice warn">The 3D model could not load (${esc(err.message)}). It needs an internet connection for three.js; the tables above have the same numbers.</div>`;
   }
+}
+
+// The sun controls under the 3D model: a day, a time (Swedish time) and a run
+// through the day; the sun, its light and the shadows follow.
+function bindSunControls(s) {
+  const slider = $('#solar-sun-time');
+  const clock = $('#solar-sun-clock');
+  const readout = $('#solar-sun-readout');
+  const play = $('#solar-sun-play');
+  if (!slider || !s.view?.setSun) return;
+  const compass = (az) => ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(az / 45) % 8];
+  const paint = () => {
+    const day = SUN_DAY_CHOICES.find((d) => d.key === s.sunDay) || SUN_DAY_CHOICES[0];
+    const p = s.view.setSun(day.month, day.day, s.sunHour);
+    const h = Math.floor(s.sunHour);
+    clock.textContent = `${String(h).padStart(2, '0')}:${String(Math.round((s.sunHour - h) * 60)).padStart(2, '0')}`;
+    readout.textContent = p.el > 0 ? `sun ${Math.round(p.el)}° up, from the ${compass(p.az)} (${Math.round(p.az)}°)` : 'the sun is below the horizon';
+  };
+  slider.addEventListener('input', () => {
+    s.sunHour = Number(slider.value);
+    paint();
+  });
+  $('#solar-sun').addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-sun-day]');
+    if (!chip) return;
+    s.sunDay = chip.dataset.sunDay;
+    for (const c of $$('#solar-sun [data-sun-day]')) c.classList.toggle('active', c === chip);
+    paint();
+  });
+  let timer = null;
+  play.addEventListener('click', () => {
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+      play.textContent = '▶ Day';
+      return;
+    }
+    play.textContent = '❚❚ Stop';
+    timer = setInterval(() => {
+      if (!slider.isConnected) return clearInterval(timer);
+      s.sunHour = s.sunHour >= 23 ? 3 : s.sunHour + 0.25;
+      slider.value = String(s.sunHour);
+      paint();
+    }, 120);
+  });
+  paint();
 }
 
 // ---------------------------------------------------------------------- guide

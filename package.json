@@ -16,5 +16,5 @@
     "handshake": "node scripts/ocpi-handshake.js",
     "test": "node --test \"server/**/*.test.js\""
   },
-  "license": "UNLICENSED"
+  "license": "MPL-2.0"
 }

@@ -303,10 +303,20 @@ anläggnings-id (only a short hash of it) nor the organisation number.
   never more than the meter measured. *Everything else* = measured − chargers.
 - *Billed peak*: the month's highest hour, or the average of the 2/3/5 highest
   hours on different days (*Billed on*; check the E.ON Elnät tariff).
-- *Cost*: kWh × (energy + transfer + energy tax) + billed peak × kr/kW + fixed
-  fee, plus VAT. The prices are placeholders to be replaced with the invoice
-  figures; they are saved in the browser. E.ON's paid cost-breakdown product
-  (49 kr/month) would give the invoice numbers instead.
+- *Cost*: energy priced per quarter hour, + billed peak × kr/kW + fixed fee,
+  plus VAT. Each quarter's measured kWh is priced at that quarter's SE4 spot
+  price plus the contract surcharge (the club's contract is quarter-hour spot,
+  P15M); the grid energy fee is flat until 2026 and from 2027 6.40 öre + 12.1 %
+  of the quarter's spot; energy tax per kWh. The defaults are fitted to E.ON's
+  bill (surcharge 8.0 öre: the bill's contract cost minus the spot price of
+  the quarters actually used); they can be changed and are saved in the
+  browser. Hours without a spot price use the flat price. The effektavgift
+  stays on the hourly mean, as E.ON bills it.
+- *Spot prices*: SE4 day-ahead prices per quarter hour from
+  [elprisetjustnu.se](https://www.elprisetjustnu.se/elpris-api) (one price per
+  hour before 1 Oct 2025, stored as four equal quarters), fetched by the build
+  into `snapshot.spot` and extended run by run: only the last two days and
+  tomorrow are asked for. A failure keeps the previous prices.
 - *Chargers' share*: what the club would not have paid without them: their
   kWh at the per-kWh prices plus the drop in effektavgift if their part of every
   hour were removed (billed peak with them − billed peak without them),
@@ -420,6 +430,8 @@ server/snapshot.js     One JSON snapshot of everything the UI shows (static site
 server/eon-client.js   E.ON Energidata API: OAuth2 client credentials, retries
 server/eon.js          Meter values: Swedish time stamps -> UTC, series choice, incremental fetch
 server/eon-demo.js     Invented meter values in E.ON's format, for demo mode
+server/spot.js         SE4 spot prices per quarter hour (elprisetjustnu.se), incremental
+tools/roof-solar/      Roofs from Lantmäteriet's laser data; simulate.mjs: solar per quarter hour (PVGIS, SMHI STRÅNG)
 public/meter.js        Meter maths: chargers vs. the rest, billed peaks, cost breakdown
 public/economics.js    Accounts, break-even price, what the limits saved
 server/demo-data.js    Deterministic demo data (OCPI 2.2.1 shaped)

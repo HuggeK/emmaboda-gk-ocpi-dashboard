@@ -8,14 +8,21 @@
 // the model in analysis.js; the rest of the measured hour is everything else
 // (clubhouse, kitchen, heating, pumps...).
 import { HOUR_MS, billedPeak, limitAt, limitsBetween, monthKey, isWinter, MAIN_FUSE_KW, DEFAULT_OPTIONS } from './analysis.js';
+import { GRID_2027 } from './contracts.js';
 
 const MINUTE_MS = 60_000;
+const QUARTER_MS = 15 * MINUTE_MS;
+const GRID_SPOT_FROM = new Date(`${GRID_2027.from}T00:00:00`).getTime(); // local midnight
 
 // What one kWh and one month cost, öre and kr excl. VAT. Replace them with the
 // numbers on the club's own invoices (grid: E.ON Elnät; energy: the retailer).
+// Energy is priced per quarter hour where the snapshot has SE4 spot prices
+// (the club's contract is quarter-hour spot, P15M): spot + surchargeOre. The
+// flat retailOre is used only for hours without a spot price.
 export const DEFAULT_TARIFF = {
-  retailOre: 80, // elhandel: SE4 spot averaged about 67 öre in 2025, plus the retailer's surcharge
-  transferOre: 20, // E.ON Elnät överföringsavgift (placeholder)
+  surchargeOre: 8.0, // elhandel on top of spot: surcharge, fees, certificates. Fitted to E.ON's bill: 7.96 öre in Jul 2025 – Jun 2026, 7.58 the year before
+  retailOre: 80, // flat elhandel price, only where no spot price is known
+  transferOre: 17.3, // E.ON Elnät energiavgift until 2026 (bill: 28,589 kr for 165,686 kWh); from 2027 6.40 öre + 12.1 % of spot
   energyTaxOre: 36, // energiskatt 2026 (Skatteverket: 36.0 öre/kWh; 43.9 in 2025)
   fixedKr: Date.now() >= new Date(2027, 0, 1).getTime() ? 712 : 709, // E.ON Elnät fixed fee per month (2027 price list)
   krPerKw: DEFAULT_OPTIONS.krPerKw, // effektavgift per kW of the month's billed peak
@@ -58,12 +65,55 @@ export function meterQuarters(installation) {
   return out;
 }
 
+// Hour start (ms) -> the spot price the club paid on average in that hour,
+// öre/kWh: each quarter's price weighted by the energy measured in that
+// quarter, so Σ hour kWh × this = Σ quarter kWh × quarter price exactly.
+// Hours without quarter values get the plain mean of their quarter prices.
+// Also returns `plain`: hour -> unweighted mean, for comparison.
+export function hourlySpot(installation, spot) {
+  const prices = expandSeries(spot);
+  const kwh = expandSeries(installation?.quarter);
+  const hours = new Map();
+  for (const [t, ore] of prices) {
+    const hour = Math.floor(t / HOUR_MS) * HOUR_MS;
+    const h = hours.get(hour) || { sum: 0, n: 0, wSum: 0, w: 0 };
+    h.sum += ore;
+    h.n += 1;
+    const q = kwh.get(t);
+    if (q !== undefined) {
+      h.wSum += ore * q;
+      h.w += q;
+    }
+    hours.set(hour, h);
+  }
+  const weighted = new Map();
+  const plain = new Map();
+  for (const [hour, h] of hours) {
+    plain.set(hour, h.sum / h.n);
+    weighted.set(hour, h.w > 0 ? h.wSum / h.w : h.sum / h.n);
+  }
+  return { weighted, plain };
+}
+
+// Energy price per kWh for one hour, öre excl. VAT: the contract (spot +
+// surcharge, or the flat price without spot) and the grid energy fee (flat
+// until 2026; from 2027 a fixed part plus a share of the quarter-hour spot).
+export function hourPrices(at, spotOre, t = DEFAULT_TARIFF) {
+  const hasSpot = Number.isFinite(spotOre);
+  const retail = hasSpot ? spotOre + t.surchargeOre : t.retailOre;
+  const spotForGrid = hasSpot ? spotOre : t.retailOre - t.surchargeOre;
+  const transfer = at >= GRID_SPOT_FROM ? GRID_2027.energyOre + (GRID_2027.energySpotPct / 100) * Math.max(0, spotForGrid) : t.transferOre;
+  return { retail, transfer, tax: t.energyTaxOre, total: retail + transfer + t.energyTaxOre };
+}
+
 // One entry per measured hour: the meter's kW, the chargers' estimated kW
 // (never more than the meter measured), everything else, the limit in force
 // and how much room that limit left for the chargers. Under a facility
 // ceiling the room is the ceiling minus everything else; under a charger cap
-// it is the cap.
-export function splitHours(meter, chargerProfile, range = null, capOptions = {}) {
+// it is the cap. `spot`: hourlySpot()'s result; each row carries the hour's
+// consumption-weighted spotOre and its plain mean spotPlainOre (null without
+// a price).
+export function splitHours(meter, chargerProfile, range = null, capOptions = {}, spot = null) {
   const rows = [];
   for (const [at, meterKw] of meter) {
     if (range && (at < range.from || at >= range.to)) continue;
@@ -76,7 +126,7 @@ export function splitHours(meter, chargerProfile, range = null, capOptions = {})
     if (limit?.kind === 'facility') chargerKw = Math.min(chargerKw, Math.max(0, limit.kw - (meterKw - chargerKw)));
     const otherKw = meterKw - chargerKw;
     const roomKw = !limit ? null : limit.kind === 'facility' ? Math.max(0, limit.kw - otherKw) : limit.kw;
-    rows.push({ at, meterKw, chargerKw, otherKw, limitKw: limit?.kw ?? null, limitKind: limit?.kind ?? null, roomKw, overEstimate: estimated > chargerKw + 0.05 });
+    rows.push({ at, meterKw, chargerKw, otherKw, limitKw: limit?.kw ?? null, limitKind: limit?.kind ?? null, roomKw, overEstimate: estimated > chargerKw + 0.05, spotOre: spot?.weighted.get(at) ?? null, spotPlainOre: spot?.plain.get(at) ?? null });
   }
   return rows;
 }
@@ -109,7 +159,6 @@ const money = (ore, kwh) => (ore * kwh) / 100;
 export function monthlyMeter(rows, { tariff = DEFAULT_TARIFF, revenue = null, range = null, now = Date.now(), capOptions = {} } = {}) {
   const t = { ...DEFAULT_TARIFF, ...tariff };
   const vat = 1 + (t.vatPct || 0) / 100;
-  const perKwhOre = t.retailOre + t.transferOre + t.energyTaxOre;
   const months = new Map();
   for (const r of rows) {
     const key = monthKey(r.at);
@@ -129,13 +178,40 @@ export function monthlyMeter(rows, { tariff = DEFAULT_TARIFF, revenue = null, ra
     const atPeak = peak.hours.map((h) => h.row);
     const chargersAtPeakKw = atPeak.length ? atPeak.reduce((sum, h) => sum + h.chargerKw, 0) / atPeak.length : 0;
 
-    const energy = money(t.retailOre, kwh);
-    const transfer = money(t.transferOre, kwh);
+    // Energy priced hour by hour at the quarter-hour spot prices (weighted by
+    // the quarters' measured kWh) where known, the flat tariff elsewhere.
+    let energy = 0;
+    let transfer = 0;
+    let chargerEnergyCost = 0;
+    let spotKwh = 0;
+    let spotPaid = 0;
+    let spotPlain = 0;
+    let spotHours = 0;
+    for (const h of hours) {
+      const p = hourPrices(h.at, h.spotOre, t);
+      energy += money(p.retail, h.meterKw);
+      transfer += money(p.transfer, h.meterKw);
+      chargerEnergyCost += money(p.total, h.chargerKw);
+      if (h.spotOre !== null && h.spotOre !== undefined) {
+        spotKwh += h.meterKw;
+        spotPaid += h.spotOre * h.meterKw;
+        spotPlain += h.spotPlainOre ?? h.spotOre;
+        spotHours += 1;
+      }
+    }
     const energyTax = money(t.energyTaxOre, kwh);
     const effect = peak.kw * t.krPerKw;
     const fixed = t.fixedKr;
     const exVat = energy + transfer + energyTax + effect + fixed;
-    const chargerEnergyCost = money(perKwhOre, chargerKwh);
+    // Spot the club paid (consumption-weighted, öre/kWh) against the month's
+    // plain average: the gap × kWh is what the timing of its use cost (+) or
+    // saved (−) on the contract, excl. VAT.
+    const spot = spotHours ? {
+      hours: spotHours,
+      paidOre: spotKwh > 0 ? spotPaid / spotKwh : null,
+      averageOre: spotPlain / spotHours,
+      timingKr: spotKwh > 0 ? ((spotPaid / spotKwh - spotPlain / spotHours) * spotKwh) / 100 : 0,
+    } : null;
     const chargerEffectCost = Math.max(0, peak.kw - peakWithout.kw) * t.krPerKw;
     const chargerCostInclVat = (chargerEnergyCost + chargerEffectCost) * vat;
     const monthRevenue = revenue?.get(month) || 0;
@@ -159,6 +235,7 @@ export function monthlyMeter(rows, { tariff = DEFAULT_TARIFF, revenue = null, ra
       otherAtPeakKw: peak.kw - chargersAtPeakKw,
       peakWithoutChargersKw: peakWithout.kw,
       cost: { energy, transfer, energyTax, effect, fixed, exVat, vat: exVat * (vat - 1), inclVat: exVat * vat },
+      spot,
       chargers: {
         energyCost: chargerEnergyCost,
         effectCost: chargerEffectCost,

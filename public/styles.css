@@ -348,6 +348,11 @@ tbody tr:hover { background: var(--surface-2); }
 .conf-estimated, .conf-possible { border-color: var(--warning); }
 .conf-unknown { border-style: dashed; }
 
+/* Solar: the 3D model */
+.solar-3d { position: relative; height: 480px; border-radius: 8px; overflow: hidden; background: var(--surface-2); touch-action: none; }
+.solar-3d canvas { display: block; width: 100%; height: 100%; }
+@media (max-width: 640px) { .solar-3d { height: 340px; } }
+
 /* Economics */
 .chart .market-band { fill: var(--accent-soft); opacity: 0.6; }
 .chart .dot.other { fill: var(--series-1); stroke: var(--surface); stroke-width: 2; }

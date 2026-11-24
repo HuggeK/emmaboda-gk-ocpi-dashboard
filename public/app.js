@@ -17,7 +17,7 @@ import {
 import { DEFAULT_TARIFF, meterHours, splitHours, dailyPeaks, monthlyMeter, summarize, seasonalPicture, rateFromMeter, monthlyTopHours, typicalDay } from './meter.js';
 import { FACILITY_LOADS, BASE_LOAD_KW, explainPeak, inHours, loadLabel } from './facility.js';
 import { DEFAULT_COSTS, MARKET_BAND, account, limitSavings, priceAdvice, winterCeilingCheck, nightOffCheck } from './economics.js';
-import { BILL, BILL_PARTS, BILL_SOURCE, GRID_2027, SOLAR, billTotal } from './contracts.js';
+import { BILL, BILL_PARTS, BILL_SOURCE, GRID_2027, SOLAR_SIMULATION, billTotal } from './contracts.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -217,7 +217,7 @@ function referenceTime() {
 }
 
 // -------------------------------------------------------------------- router
-const views = { overview: renderOverview, live: renderLive, records: renderRecords, analysis: renderAnalysis, meter: renderMeter, economics: renderEconomics, chargers: renderChargers, connection: renderConnection, guide: renderGuide };
+const views = { overview: renderOverview, live: renderLive, records: renderRecords, analysis: renderAnalysis, meter: renderMeter, economics: renderEconomics, solar: renderSolar, chargers: renderChargers, connection: renderConnection, guide: renderGuide };
 
 // Live, Records and the charging points share the Chargers tab, with sub-tabs.
 const CHARGING_TABS = ['live', 'records', 'chargers'];
@@ -1958,8 +1958,8 @@ async function renderEconomics() {
     </div>
 
     <div class="card">
-      <div class="card-head"><h3>Solar: where it helps most</h3><span class="subtle">from the club’s energy analysis (July 2026)</span></div>
-      ${solarHtml()}
+      <div class="card-head"><h3>Solar</h3></div>
+      <p>The roofs have been modelled from Lantmäteriet’s laser scans: about 33 kWp fits on the office and the studio, used almost entirely by the club itself. The 3D model, the numbers per building and the payback are on the <a href="#solar">Solar</a> tab.</p>
     </div>
 
     <div class="card">
@@ -2127,18 +2127,6 @@ function grid2027Html(now) {
     <p class="subtle"><strong>Reactive power:</strong> ${esc(g.reactive)} The club has a 125 A fuse, so it pays nothing for reactive power, even with the irrigation pumps. Production above 43.5 kW will pay a grid energy fee from 2027, which matters for solar (below).</p>`;
 }
 
-function solarHtml() {
-  const kwh = (kwp) => kwp * SOLAR.yieldKwhPerKwp;
-  return `
-    <p>The energy analysis looked at solar on the club’s east–west roofs (about ${fmtNum(SOLAR.yieldKwhPerKwp, 0)} kWh per kWp a year):</p>
-    <div class="table-wrap"><table>
-      <thead><tr><th>Roof</th><th class="num">Size</th><th class="num">Production / year</th><th class="num">Value / year (analysis)</th></tr></thead>
-      <tbody>${SOLAR.options.map((s) => `<tr><td>${esc(s.roof)}</td><td class="num">${fmtNum(s.kwp, 0)} kWp</td><td class="num">${fmtNum(kwh(s.kwp), 0)} kWh</td><td class="num">≈ ${fmtMoney(s.krPerYear, 'SEK')}</td></tr>`).join('')}</tbody>
-    </table></div>
-    <p><strong>Where solar helps most: used on site, in the daytime season.</strong> Each solar kWh the club uses itself replaces a bought kWh with everything on top of it: the electricity contract, the grid energy fee and the energy tax, together about ${fmtNum(((BILL[0].retail + BILL[0].gridEnergy + BILL[0].tax) / BILL[0].kwh), 2)} kr/kWh excl. VAT over the last 12 months. A kWh sent out to the grid only earns the spot price. So the panels pay best when the facility is using power while the sun shines, and it is: from March to October the clubhouse, restaurant, cold rooms and golf carts draw most between 09 and 15 (see “When do the peaks happen” on the <a href="#meter">Meter</a> tab), and east–west roofs spread the production over exactly those hours. The chargers fit too: golfers charge while they play, in the middle of the day.</p>
-    <p><strong>What solar does not do reliably: lower the peak.</strong> The effektavgift is set by the month’s single highest hour, and one cloudy busy day is enough to set it without help from the panels. Solar lowers the energy part of the bill; the peak needs the ceilings (and later perhaps a battery, which the energy analysis also looked at). In winter, when the heating sets the peaks, solar produces little.</p>
-    <p><strong>Keep the export at or below ${fmtNum(SOLAR.exportCapKw, 1)} kW.</strong> From 2027 production above 43.5 kW pays a grid energy fee, and the energy analysis already limits the export to ${fmtNum(SOLAR.exportCapKw, 1)} kW at the meter. The smaller office roof would be used almost entirely on site; the barn roof would export more around midday in summer, so it gains most from using that power on site (charging, cooling, a battery).</p>`;
-}
 
 // A price ladder: the break-even prices, the market band and the current price on one kr/kWh axis.
 function drawPriceLadder(container, acc, price) {
@@ -2160,6 +2148,195 @@ function drawPriceLadder(container, acc, price) {
   const dots = marks.map((m, i) => `<circle class="dot ${m.cls}" cx="${x(m.kr)}" cy="${y0}" r="6"></circle><text class="tick" x="${x(m.kr)}" y="${y0 - 12 - (i % 2) * 12}" text-anchor="middle">${esc(m.label)} ${fmtNum(m.kr, 2)}</text>`).join('');
   const current = `<line class="limit-line" x1="${x(price)}" x2="${x(price)}" y1="${pad.t}" y2="${y0 + 14}" style="stroke-dasharray:none"></line><text class="bar-label" x="${x(price) + 6}" y="${y0 + 14}">our price ${fmtNum(price, 2)}</text>`;
   container.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Break-even prices, the public price band and our price per kWh">${ticks}${band}<line class="axis-line" x1="${pad.l}" x2="${W - pad.r}" y1="${y0}" y2="${y0}"></line>${dots}${current}</svg>`;
+}
+
+// ---------------------------------------------------------------------- solar
+// Would solar panels pay? The roofs modelled from Lantmäteriet's laser data
+// (tools/roof-solar → data/solar-roofs.json), a 3D model of the panels that
+// fit, and the value worked out on the club's own consumption.
+const SUGGESTED_ROOFS = ['kansli', 'studio']; // at the kanslipunkt, with capacity back to the meter
+
+// Value a year of a system of kwp producing kwh: the energy it replaces on
+// site (exported above the simulated on-site share earns spot only, roughly
+// a third), plus the effektavgift saving from the simulation, scaled by how
+// well these roofs face the sun compared with the simulated east/west roof.
+function solarValue(kwp, kwh) {
+  const sim = SOLAR_SIMULATION;
+  const pick = (k) => {
+    const s = sim.sizes;
+    if (kwp <= s[0].kwp) return (s[0][k] * kwp) / s[0].kwp;
+    for (let i = 1; i < s.length; i += 1) {
+      if (kwp <= s[i].kwp) {
+        const t = (kwp - s[i - 1].kwp) / (s[i].kwp - s[i - 1].kwp);
+        return s[i - 1][k] + t * (s[i][k] - s[i - 1][k]);
+      }
+    }
+    return (s.at(-1)[k] * kwp) / s.at(-1).kwp;
+  };
+  const yieldRatio = kwp > 0 ? kwh / kwp / sim.genericYield : 0;
+  const onSite = Math.min(1, pick('onSite'));
+  const energy = kwh * (onSite * sim.krPerKwhOnSite + (1 - onSite) * sim.krPerKwhOnSite * 0.35);
+  const effekt = pick('effektKr') * yieldRatio;
+  return { energy, effekt, total: energy + effekt, payback: sim.costPerKwp.map((c) => (energy + effekt > 0 ? (c * kwp) / (energy + effekt) : null)) };
+}
+
+// How much each roof, and the combinations, lower the monthly peak and the
+// energy bill, from the per-roof simulation.
+function solarEffektHtml(effekt, buildings, valueOf) {
+  const name = (k) => (buildings.find((b) => b.key === k)?.name || k).replace(/ \(.*\)/, '');
+  const label = (keys) => (keys.length === buildings.length ? 'All roofs' : keys.map(name).join(' + '));
+  const rows = effekt.results.map((r) => ({ r, v: valueOf(r.keys) }));
+  const sug = effekt.results.find((r) => r.keys.length === SUGGESTED_ROOFS.length && SUGGESTED_ROOFS.every((k) => r.keys.includes(k)));
+  const singlesSum = SUGGESTED_ROOFS.reduce((t, k) => t + (effekt.results.find((r) => r.keys.length === 1 && r.keys[0] === k)?.effektKr || 0), 0);
+  return `
+    <div class="card">
+      <div class="card-head"><h3>How much each roof lowers the peak</h3><span class="subtle">each roof face simulated with its own tilt and direction · weather ${esc(effekt.weatherYears)} · consumption ${esc(effekt.period)} · ${fmtNum(effekt.krPerKw, 2)} kr/kW</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Roofs</th><th class="num">kWp</th><th class="num">Summer peak lower by</th><th class="num">Effektavgift saved / yr</th><th class="num">Range (weather years)</th><th class="num">Energy saved / yr</th><th class="num">Used on site</th><th class="num">Total / yr</th><th class="num">Payback at 10k/kWp</th></tr></thead>
+        <tbody>${rows.map(({ r, v }) => `<tr>
+          <td>${r.keys.length > 1 ? '<strong>' : ''}${esc(label(r.keys))}${r.keys.length > 1 ? '</strong>' : ''}</td>
+          <td class="num">${fmtNum(r.kwp, 1)}</td>
+          <td class="num">${fmtNum(r.summerCutKw, 1)} kW</td>
+          <td class="num">${fmtMoney(r.effektKr, 'SEK')}</td>
+          <td class="num subtle">${fmtMoney(r.effektMin, 'SEK')}–${fmtMoney(r.effektMax, 'SEK')}</td>
+          <td class="num">${fmtMoney(r.energyKr, 'SEK')}</td>
+          <td class="num">${Math.round(r.onSite * 100)}%</td>
+          <td class="num"><strong>${fmtMoney(v.total, 'SEK')}</strong></td>
+          <td class="num">${fmtNum(v.payback[1], 1)} yrs</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+      ${sug ? `<p>The effektavgift saving does not add up across roofs: the office and the studio alone would save ${fmtMoney(singlesSum, 'SEK')}, together ${fmtMoney(sug.effektKr, 'SEK')}. Once the panels cover the middle of the day, the month’s highest hour moves to the evening (chargers, the restaurant) or an irrigation night, where no roof helps. Month by month for the office and the studio:</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th></th>${sug.months.map((m) => `<th class="num">${esc(monthLabel(m.month, 'short'))}</th>`).join('')}</tr></thead>
+        <tbody>
+          <tr><td>Peak lower by, kW</td>${sug.months.map((m) => `<td class="num">${fmtNum(m.cutKw, 1)}</td>`).join('')}</tr>
+          <tr class="subtle"><td>range</td>${sug.months.map((m) => `<td class="num">${fmtNum(m.minKw, 1)}–${fmtNum(m.maxKw, 1)}</td>`).join('')}</tr>
+        </tbody>
+      </table></div>` : ''}
+      <p class="subtle">The old office’s steep south roof does the most per kWp (it produces most around midday, when the peaks are), but its roof must be repaired first. Ranges show the spread over the five weather years: whether the sun shines in the month’s peak hour decides most of it.</p>
+    </div>`;
+}
+
+async function renderSolar() {
+  const root = $('#view-solar');
+  state.solar ||= { show: 'suggested', data: null, view: null };
+  const s = state.solar;
+  if (!s.data) {
+    root.innerHTML = '<div class="loading">Loading the roof model...</div>';
+    try {
+      const res = await fetch('data/solar-roofs.json', { cache: 'no-cache' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      s.data = await res.json();
+    } catch (err) {
+      root.innerHTML = `<div class="notice error"><h3>No roof model</h3>${esc(err.message)}</div>`;
+      return;
+    }
+  }
+  if (s.effekt === undefined) {
+    // The per-roof simulation (tools/roof-solar → data/solar-effekt.json); optional.
+    s.effekt = await fetch('data/solar-effekt.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  }
+  const buildings = s.data.buildings.filter((b) => !b.error);
+  const pick = (keys) => buildings.filter((b) => keys.includes(b.key));
+  const sum = (bs, k) => bs.reduce((t, b) => t + b[k], 0);
+  // Simulated value of a set of roofs: from the per-roof simulation when it
+  // has that set, otherwise estimated from the generic east/west simulation.
+  const simOf = (keys) => s.effekt?.results.find((r) => r.keys.length === keys.length && keys.every((k) => r.keys.includes(k))) || null;
+  const valueOf = (keys) => {
+    const bs = pick(keys);
+    const kwp = sum(bs, 'kwp');
+    const sim = simOf(keys);
+    if (!sim) return { ...solarValue(kwp, sum(bs, 'kwh_year')), kwp, kwh: sum(bs, 'kwh_year'), simulated: false };
+    const total = sim.effektKr + sim.energyKr;
+    return { energy: sim.energyKr, effekt: sim.effektKr, total, kwp, kwh: sim.kwh, sim, simulated: true, payback: SOLAR_SIMULATION.costPerKwp.map((c) => (c * kwp) / total) };
+  };
+  const suggested = pick(SUGGESTED_ROOFS);
+  const sugVal = valueOf(SUGGESTED_ROOFS);
+  const sugKwp = sugVal.kwp;
+  const sugKwh = sugVal.kwh;
+  const allKeys = buildings.map((b) => b.key);
+  const allVal = valueOf(allKeys);
+  const allKwp = allVal.kwp;
+  const allKwh = sum(buildings, 'kwh_year');
+  const yrs = (v) => v.payback.map((p) => (p ? fmtNum(p, 1) : '–')).join(' / ');
+  const cost = SOLAR_SIMULATION.costPerKwp.map((c) => `${fmtNum(c / 1000, 0)}k`).join(' / ');
+  const kind = (f) => (f.flat ? 'flat' : !f.worth_it ? 'too little sun' : f.direction);
+
+  root.innerHTML = `
+    <div class="view-head"><h2>Solar</h2><span class="subtle">Would solar panels pay? The club’s roofs modelled from Lantmäteriet’s laser scans, and the value worked out on the club’s own consumption</span></div>
+    <div class="notice"><h3><span class="ok">✓ Yes, about ${fmtNum(sugKwp, 0)} kWp on the office and the studio</span></h3>
+      ${suggested.map((b) => `${esc(b.name.replace(/ \(.*\)/, ''))} ${b.panels} panels (${fmtNum(b.kwp, 1)} kWp)`).join(' and ')}: about <strong>${fmtNum(sugKwh, 0)} kWh a year</strong>, practically all used by the club itself, worth about <strong>${fmtMoney(sugVal.total, 'SEK')} a year</strong> (${fmtMoney(sugVal.energy, 'SEK')} electricity not bought, ${fmtMoney(sugVal.effekt, 'SEK')} lower effektavgift). Payback <strong>${yrs(sugVal)} years</strong> at ${cost} kr per installed kWp. Both buildings are at the office’s distribution point, which has capacity back to the meter.</div>
+    <div class="card">
+      <div class="card-head"><h3>The roofs and the panels that fit</h3><span class="spacer"></span>
+        <span class="filters" id="solar-show">
+          <button class="chip ${s.show === 'suggested' ? 'active' : ''}" data-show="suggested">Suggested: office + studio</button>
+          <button class="chip ${s.show === 'all' ? 'active' : ''}" data-show="all">All roofs</button>
+        </span>
+      </div>
+      <div id="solar-3d" class="solar-3d"><div class="loading">Loading the 3D model...</div></div>
+      <div class="series-legend">
+        <span><i class="swatch" style="background:#eb6834"></i>South-facing</span>
+        <span><i class="swatch" style="background:#2a78d6"></i>East</span>
+        <span><i class="swatch" style="background:#1baf7a"></i>West</span>
+        <span><i class="swatch" style="background:#eda100"></i>Flat</span>
+        <span><i class="swatch" style="background:#8a6fd1"></i>North, low pitch</span>
+        <span><i class="swatch" style="background:#b0aea6"></i>Too little sun</span>
+        <span><i class="swatch" style="background:#0d2a52"></i>Panel</span>
+        <span class="subtle">Drag to turn, scroll or pinch to zoom.</span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>Per building</h3><span class="subtle">${fmtNum(s.data.panel.wp, 0)} Wp panels, ${fmtNum(s.data.panel.w, 2)} × ${fmtNum(s.data.panel.h, 2)} m, ${fmtNum(s.data.panel.setback_m, 1)} m from the roof edges</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Building</th><th>Roof faces with panels</th><th class="num">Panels</th><th class="num">kWp</th><th class="num">kWh/yr</th><th class="num">kWh per kWp</th><th>Note</th></tr></thead>
+        <tbody>${buildings.map((b) => `<tr>
+          <td>${SUGGESTED_ROOFS.includes(b.key) ? '<strong>' : ''}${esc(b.name)}${SUGGESTED_ROOFS.includes(b.key) ? '</strong>' : ''}</td>
+          <td>${b.faces.filter((f) => f.panels).map((f) => `${esc(kind(f))} ${fmtNum(f.roof_tilt, 0)}° (${f.panels})`).join(', ') || '–'}</td>
+          <td class="num">${b.panels}</td><td class="num">${fmtNum(b.kwp, 1)}</td><td class="num">${fmtNum(b.kwh_year, 0)}</td>
+          <td class="num">${b.kwp ? fmtNum(b.kwh_year / b.kwp, 0) : '–'}</td>
+          <td class="subtle">${esc(b.roof)}</td>
+        </tr>`).join('')}
+          <tr><td><strong>All roofs</strong></td><td></td><td class="num"><strong>${sum(buildings, 'panels')}</strong></td><td class="num"><strong>${fmtNum(allKwp, 1)}</strong></td><td class="num"><strong>${fmtNum(allKwh, 0)}</strong></td><td></td><td class="subtle">${fmtMoney(allVal.total, 'SEK')} a year, payback ${yrs(allVal)} years: much would be exported at the spot price</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+    ${s.effekt ? solarEffektHtml(s.effekt, buildings, valueOf) : ''}
+    <div class="card">
+      <div class="card-head"><h3>What size pays best</h3><span class="subtle">simulated on the club’s measured consumption, ${esc(SOLAR_SIMULATION.period)}</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th class="num">Size</th><th class="num">Summer peak lower by</th><th class="num">Effektavgift saved / yr</th><th class="num">Energy saved / yr</th><th class="num">Total / yr</th><th class="num">Used on site</th><th class="num">Payback (${cost} kr/kWp)</th></tr></thead>
+        <tbody>${SOLAR_SIMULATION.sizes.map((r) => {
+          const total = r.effektKr + r.energyKr;
+          return `<tr><td class="num">${r.kwp} kWp</td><td class="num">${fmtNum(r.peakCutKw, 1)} kW</td><td class="num">${fmtMoney(r.effektKr, 'SEK')}</td><td class="num">${fmtMoney(r.energyKr, 'SEK')}</td><td class="num"><strong>${fmtMoney(total, 'SEK')}</strong></td><td class="num">${Math.round(r.onSite * 100)}%</td><td class="num">${SOLAR_SIMULATION.costPerKwp.map((c) => fmtNum((c * r.kwp) / total, 1)).join(' / ')} yrs</td></tr>`;
+        }).join('')}</tbody>
+      </table></div>
+      <p class="subtle">Up to about 40 kWp nearly everything is used by the club itself; above that a growing share is exported and earns only the spot price, so the payback gets longer. From 2027 production above 43.5 kW also pays a grid energy fee.</p>
+    </div>
+    <div class="card">
+      <h3>What solar does, and what it does not</h3>
+      <ul>
+        <li><strong>It lowers the energy bill.</strong> About 85 % of the value is electricity the club does not have to buy: a solar kWh used on site saves the contract price, the grid energy fee and the energy tax, about ${fmtNum(SOLAR_SIMULATION.krPerKwhOnSite, 2)} kr/kWh excl. VAT. The club uses the most power in the daytime in season, when the sun shines.</li>
+        <li><strong>It barely lowers the peak.</strong> The effektavgift is set by the month’s single highest hour, and that hour moves to the evening, an irrigation night or a cloudy day once the panels cover the middle of the day: even 80 kWp lowers the summer peak by only about 9 kW. The peak needs the ceilings (Economics tab).</li>
+        <li><strong>It goes well with the chargers.</strong> Golfers charge while they play, in the middle of the day: under a whole-facility ceiling, solar gives the chargers more room.</li>
+        <li><strong>Check before buying:</strong> the studio roof (the laser data says it slopes 13° to the north, not flat), the office’s distribution point capacity with the electrician, quotes from 2–3 installers, and repair the old office’s roof before any panels go there.</li>
+      </ul>
+    </div>
+    <div class="subtle">Roofs: Lantmäteriet’s laser scans (2019 and 2026 merged, about 1.2 points/m²) and building outlines, processed by tools/roof-solar; tilts and directions are reliable, edges to about ±0.5 m, and chimneys, vents, skylights and tree shade are not in the data. Yield per roof face: PVGIS (EU JRC). Value: the club’s E.ON meter values with SE4 hourly prices and E.ON Elnät’s 2027 prices. Installed price per kWp is an assumption until quotes arrive.</div>`;
+
+  $('#solar-show').addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-show]');
+    if (!chip) return;
+    s.show = chip.dataset.show;
+    for (const c of $$('#solar-show .chip')) c.classList.toggle('active', c === chip);
+    s.view?.select(new Set(s.show === 'all' ? buildings.map((b) => b.key) : SUGGESTED_ROOFS));
+  });
+  try {
+    const { mountSolar3d } = await import('./solar3d.js');
+    s.view?.dispose();
+    s.view = mountSolar3d($('#solar-3d'), s.data, new Set(s.show === 'all' ? buildings.map((b) => b.key) : SUGGESTED_ROOFS));
+  } catch (err) {
+    $('#solar-3d').innerHTML = `<div class="notice warn">The 3D model could not load (${esc(err.message)}). It needs an internet connection for three.js; the tables above have the same numbers.</div>`;
+  }
 }
 
 // ---------------------------------------------------------------------- guide
@@ -2217,6 +2394,7 @@ async function renderGuide() {
         <dt><a href="#meter">Meter</a></dt><dd>Det E.ON faktiskt mätt för hela anläggningen, när topparna kommer och vad som troligen orsakar dem, gränserna och vad elen kostar.</dd>
         <dt><a href="#analysis">Analysis</a></dt><dd>Hur många som laddar samtidigt, vilka timmar som är mest belastade och hur stor effekttopp <em>laddarna själva</em> skapar.</dd>
         <dt><a href="#economics">Economics</a></dt><dd>Vad laddarna drar in och kostar, om priset är rätt, vad nattstopp och vintertak ger, och vad som går att förhandla i elavtalen.</dd>
+        <dt><a href="#solar">Solar</a></dt><dd>Om solceller lönar sig: en 3D-modell av taken med panelerna som får plats (från Lantmäteriets laserdata), och vad det ger på klubbens egen förbrukning.</dd>
         <dt><a href="#live">Chargers</a></dt><dd>Laddarna: <em>Live</em> (vilka som laddar just nu), <em>Records</em> (alla laddningar, kan laddas ner som Excel-fil) och <em>Charging points</em> (laddpunkterna och deras uttag).</dd>
         <dt><a href="#connection">Connection</a></dt><dd>Teknisk felsökning: vad ChargeNode och E.ON svarade.</dd>
       </dl>

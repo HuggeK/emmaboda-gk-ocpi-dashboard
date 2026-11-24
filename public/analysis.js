@@ -49,7 +49,8 @@ export const DEFAULT_OPTIONS = {
   limits: 'actual',
   capKw: 43.5,
   winterCapKw: 25,
-  krPerKw: 120.8, // E.ON E4N04L 2026: single highest hour, same all year (energy analysis v1.31)
+  // E.ON E4N04L: single highest hour, same every month. 120.80 kr/kW in 2026, 123.70 from 1 Jan 2027.
+  krPerKw: Date.now() >= new Date(2027, 0, 1).getTime() ? 123.7 : 120.8,
   peakCount: 1,
   chargers: 6,
 };

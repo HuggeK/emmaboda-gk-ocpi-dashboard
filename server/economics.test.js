@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { account, limitSavings, priceAdvice, monthsIn, winterCeilingCheck, DEFAULT_COSTS } from '../public/economics.js';
+import { account, limitSavings, priceAdvice, monthsIn, winterCeilingCheck, nightOffCheck, DEFAULT_COSTS } from '../public/economics.js';
+import { BILL, billTotal } from '../public/contracts.js';
 import { HOUR_MS } from '../public/analysis.js';
 
 const tariff = { retailOre: 80, transferOre: 20, energyTaxOre: 36, fixedKr: 0, krPerKw: 120, peakCount: 1, vatPct: 25 };
@@ -41,6 +42,27 @@ test('priceAdvice: ok, warn (depends on the peaks) and bad', () => {
   assert.equal(priceAdvice({ ...base, effekt: { measured: null, measuredMonths: 0 }, breakEven: { none: 2, expected: 7, worst: 7.8 } }).level, 'warn');
   assert.equal(priceAdvice({ ...base, effekt: { measured: 5000, measuredMonths: 12 }, breakEven: { none: 2, expected: 6, worst: 7.8 } }).level, 'bad');
   assert.match(priceAdvice({ ...base, effekt: { measured: null, measuredMonths: 0 }, breakEven: { none: 2, expected: 3, worst: 4 } }).market, /Within/);
+});
+
+test('nightOffCheck: only night charging that sets the peak counts as a saving', () => {
+  const day = new Date(2025, 4, 10, 12).getTime();
+  const night = new Date(2025, 4, 11, 23).getTime();
+  const rows = [
+    { at: day, meterKw: 50, chargerKw: 20, otherKw: 30 }, // the month's peak is in the daytime
+    { at: night, meterKw: 45, chargerKw: 11, otherKw: 34 }, // irrigation plus a car at night
+  ];
+  const r = nightOffCheck(rows, { from: 22, to: 6, krPerKw: 100, marginPerKwh: 2 });
+  assert.equal(r.savedKr, 0); // the daytime hour still sets the peak
+  assert.equal(r.nightKwh, 11);
+  assert.equal(r.lostMarginKr, 22);
+  const r2 = nightOffCheck([{ ...rows[0], meterKw: 40, chargerKw: 10 }, rows[1]], { from: 22, to: 6, krPerKw: 100, marginPerKwh: 2 });
+  assert.equal(r2.savedKr, 500); // peak 45 at night → 40 in the daytime
+});
+
+test('the bill parts add up to the export totals', () => {
+  assert.equal(billTotal(BILL[0]), 315099);
+  assert.equal(billTotal(BILL[1]), 254079);
+  assert.ok(!JSON.stringify(BILL).match(/735999|559064/), 'no meter id or org number');
 });
 
 test('winterCeilingCheck: saved effektavgift against the charging the ceiling holds back', () => {

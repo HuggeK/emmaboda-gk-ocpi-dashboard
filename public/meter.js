@@ -17,7 +17,7 @@ export const DEFAULT_TARIFF = {
   retailOre: 80, // elhandel: SE4 spot averaged about 67 öre in 2025, plus the retailer's surcharge
   transferOre: 20, // E.ON Elnät överföringsavgift (placeholder)
   energyTaxOre: 36, // energiskatt 2026 (Skatteverket: 36.0 öre/kWh; 43.9 in 2025)
-  fixedKr: 709, // E.ON Elnät fixed fee per month, 2026 (energy analysis v1.31)
+  fixedKr: Date.now() >= new Date(2027, 0, 1).getTime() ? 712 : 709, // E.ON Elnät fixed fee per month (2027 price list)
   krPerKw: DEFAULT_OPTIONS.krPerKw, // effektavgift per kW of the month's billed peak
   peakCount: 1, // the billed peak is the average of this many highest hours (on different days)
   vatPct: 25,

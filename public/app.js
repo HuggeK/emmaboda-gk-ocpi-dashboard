@@ -9,13 +9,15 @@ import {
   LIMIT_HISTORY,
   SEASON_PLAN,
   dayStart,
+  limitAt,
   MAIN_FUSE_A,
   MAIN_FUSE_KW,
   DEFAULT_OPTIONS as ANALYSIS_DEFAULTS,
 } from './analysis.js';
 import { DEFAULT_TARIFF, meterHours, splitHours, dailyPeaks, monthlyMeter, summarize, seasonalPicture, rateFromMeter, monthlyTopHours, typicalDay } from './meter.js';
 import { FACILITY_LOADS, BASE_LOAD_KW, explainPeak, inHours, loadLabel } from './facility.js';
-import { DEFAULT_COSTS, MARKET_BAND, account, limitSavings, priceAdvice, winterCeilingCheck } from './economics.js';
+import { DEFAULT_COSTS, MARKET_BAND, account, limitSavings, priceAdvice, winterCeilingCheck, nightOffCheck } from './economics.js';
+import { BILL, BILL_PARTS, BILL_SOURCE, GRID_2027, SOLAR, billTotal } from './contracts.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -215,17 +217,23 @@ function referenceTime() {
 }
 
 // -------------------------------------------------------------------- router
-const views = { live: renderLive, records: renderRecords, analysis: renderAnalysis, meter: renderMeter, economics: renderEconomics, chargers: renderChargers, connection: renderConnection, guide: renderGuide };
+const views = { overview: renderOverview, live: renderLive, records: renderRecords, analysis: renderAnalysis, meter: renderMeter, economics: renderEconomics, chargers: renderChargers, connection: renderConnection, guide: renderGuide };
+
+// Live, Records and the charging points share the Chargers tab, with sub-tabs.
+const CHARGING_TABS = ['live', 'records', 'chargers'];
 
 function currentTab() {
   const hash = location.hash.replace('#', '');
-  return views[hash] ? hash : 'live';
+  return views[hash] ? hash : 'overview';
 }
 
 function route() {
   const tab = currentTab();
+  const top = CHARGING_TABS.includes(tab) ? 'charging' : tab;
   clearTimeout(state.liveTimer);
-  for (const link of $$('.tabs a')) link.classList.toggle('active', link.dataset.tab === tab);
+  for (const link of $$('.tabs a')) link.classList.toggle('active', link.dataset.tab === top);
+  for (const link of $$('.subtabs a')) link.classList.toggle('active', link.dataset.tab === tab);
+  $('#charging-subtabs').hidden = top !== 'charging';
   for (const view of $$('.view')) view.hidden = view.id !== `view-${tab}`;
   // A newly chosen tab starts at the top, even if the previous one was scrolled far down.
   if (state.currentTab && state.currentTab !== tab) window.scrollTo({ top: 0 });
@@ -289,6 +297,74 @@ async function loadLocationLabels() {
 }
 function evseLabel(uid, evseId) {
   return state.locationLabels.get(uid) || state.locationLabels.get(evseId) || evseId || uid || '–';
+}
+
+// ------------------------------------------------------------------- overview
+// The first page: the month's billed peak this year, how much of it the
+// chargers caused, and the limit in force. Details live on the other tabs.
+async function renderOverview() {
+  const root = $('#view-overview');
+  if (!root.dataset.rendered) root.innerHTML = '<div class="loading">Loading...</div>';
+  let eon;
+  let records;
+  try {
+    ({ eon, records } = await loadMeterInputs());
+  } catch (err) {
+    root.innerHTML = errorHtml(err);
+    return;
+  }
+  root.dataset.rendered = '1';
+  const inst = eon?.configured ? (eon.installations || []).find((i) => i.hourly) : null;
+  const head = `<div class="view-head"><h2>Overview</h2><span class="subtle">The facility’s monthly power peak, which sets the effektavgift, and the chargers’ part of it</span></div>`;
+  if (!inst) {
+    root.innerHTML = `${head}${eonSetupHtml(eon)}<p>Meanwhile the <a href="#live">Chargers</a> tab shows the charging points and sessions.</p>`;
+    return;
+  }
+  const o = state.analysis.options;
+  const t = state.meter.tariff;
+  const now = referenceTime();
+  const rows = splitHours(meterHours(inst), hourlyProfile(records, o), null, o);
+  const all = monthlyMeter(rows, { tariff: t, revenue: revenueByMonth(records), now: now.getTime(), capOptions: o });
+  const year = String(now.getFullYear());
+  const months = all.filter((m) => m.month.startsWith(year));
+  const current = all.at(-1);
+  const effekt = months.reduce((s, m) => s + m.cost.effect, 0);
+  const added = months.reduce((s, m) => s + m.chargers.effectCost, 0);
+  const limit = limitAt(now.getTime(), o);
+  const vat = 1 + t.vatPct / 100;
+  const tiles = [
+    {
+      label: `Peak so far in ${monthLabel(current.month)}`,
+      value: `${fmtNum(current.peakKw, 1)}<small>kW</small>`,
+      hint: current.peakAt !== null ? `${fmtDateTime(current.peakAt)} · chargers about ${fmtNum(current.chargersAtPeakKw, 1)} kW of it · ${fmtMoney(current.cost.effect * vat, 'SEK')} at ${fmtNum(t.krPerKw, 1)} kr/kW` : '–',
+    },
+    {
+      label: `Effektavgift ${year}`,
+      value: fmtMoney(effekt * vat, 'SEK'),
+      hint: `${months.length} month${months.length === 1 ? '' : 's'}, incl. VAT, from the measured monthly peaks`,
+    },
+    {
+      label: 'Added by the chargers',
+      value: fmtMoney(added * vat, 'SEK'),
+      hint: `of the effektavgift ${year}: the peak with the chargers minus the peak without them (estimated)`,
+    },
+    {
+      label: 'Limit now',
+      value: limit ? `${fmtNum(limit.kw, 1)}<small>kW</small>` : '–',
+      hint: limit ? `${limit.kind === 'facility' ? 'for the whole facility; the chargers get what is left' : 'for the chargers together'} · yearly plan: ${SEASON_PLAN.winter.amps} A for the whole facility from 26 Oct, ${SEASON_PLAN.season.amps} A for the chargers from 1 Mar` : '',
+    },
+  ];
+  root.innerHTML = `${head}
+    <div class="grid grid-tiles">
+      ${tiles.map((x) => `<div class="card tile"><span class="label">${esc(x.label)}</span><span class="value">${x.value}</span><span class="hint">${esc(x.hint)}</span></div>`).join('')}
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>Billed peak per month (kW): the chargers’ part and everything else</h3><span class="subtle">${year} · the highest hour of the month · lighter bars are partial months · dashes mark the limit in force</span></div>
+      ${seriesLegendHtml()}
+      <div class="chart" id="overview-months"></div>
+      <p class="subtle">E.ON bills the effektavgift on each month’s single highest hour (${fmtNum(t.krPerKw, 1)} kr/kW). Orange is the chargers’ estimated part of that hour. More on the <a href="#meter">Meter</a> tab (when the peaks happen and why), <a href="#economics">Economics</a> (what the chargers earn and cost) and in <a href="#guide">Så funkar det</a>.</p>
+    </div>`;
+  drawMeterMonths($('#overview-months'), months);
 }
 
 // ----------------------------------------------------------------------- live
@@ -474,7 +550,9 @@ async function renderRecords() {
     const items = data.items.filter((c) => {
       const t = Date.parse(c.start || c.end || 0);
       return t >= range.from.getTime() && t < range.to.getTime();
-    });
+    }).map((c) => (c.duration_h > 0 || !c.start || !c.end
+      ? c
+      : { ...c, duration_h: (Date.parse(c.end) - Date.parse(c.start)) / 3_600_000 })); // ChargeNode reports 0
     body.innerHTML = recordsHtml(items, range);
     drawEnergyChart($('#records-chart'), items, range);
     bindRecordsTable(items);
@@ -617,8 +695,9 @@ function drawEnergyChart(container, items, range) {
     if (weekly) d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // Monday
     return d.getTime();
   };
-  for (let t = bucketStart(range.from); t < range.to.getTime(); t += weekly ? 7 * DAY_MS : DAY_MS) {
-    buckets.set(t, { start: t, kwh: 0, sessions: 0 });
+  // Step by calendar days, not by 24 h, so the buckets stay on local midnight across DST changes.
+  for (const d = new Date(bucketStart(range.from)); d.getTime() < range.to.getTime(); d.setDate(d.getDate() + (weekly ? 7 : 1))) {
+    buckets.set(d.getTime(), { start: d.getTime(), kwh: 0, sessions: 0 });
   }
   for (const c of items) {
     const b = buckets.get(bucketStart(c.start || c.end));
@@ -1869,6 +1948,21 @@ async function renderEconomics() {
     </div>
 
     <div class="card">
+      <div class="card-head"><h3>Switch the chargers off at night?</h3><span class="subtle">so they never run with the irrigation pumps</span></div>
+      ${nightOffHtml(meterRows, t, last12)}
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>What can be negotiated in the electricity contracts?</h3><span class="subtle">${esc(BILL_SOURCE)} · kr excl. VAT</span></div>
+      ${contractsHtml()}
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>Solar: where it helps most</h3><span class="subtle">from the club’s energy analysis (July 2026)</span></div>
+      ${solarHtml()}
+    </div>
+
+    <div class="card">
       <div class="card-head"><h3>Costs</h3><span class="subtle">kr excl. VAT · saved in this browser</span></div>
       <form class="filters tariff-form" id="economics-costs">
         <label title="ChargeNode's fixed fee per charging point and month, from the contract">ChargeNode <input type="number" name="chargeNodePerPointMonth" value="${costs.chargeNodePerPointMonth}" step="1" min="0"> kr/point/month</label>
@@ -1881,7 +1975,7 @@ async function renderEconomics() {
         <button type="submit" class="primary">Recalculate</button>
         <button type="button" id="economics-reset">Defaults</button>
       </form>
-      <div class="subtle">This system: E.ON meter values ${fmtMoney(costs.eonMeterKrMonth * 12, 'SEK')}/year${costs.eonCostsKrMonth ? ` + cost breakdown ${fmtMoney(costs.eonCostsKrMonth * 12, 'SEK')}/year` : ''}; GitHub (hourly job and the published site) costs nothing within the plan’s 3,000 Actions minutes a month. Electricity prices and the effektavgift are set on the <a href="#meter">Meter</a> tab.</div>
+      <div class="subtle">This system: E.ON meter values ${fmtMoney(costs.eonMeterKrMonth * 12, 'SEK')}/year${costs.eonCostsKrMonth ? ` + cost breakdown ${fmtMoney(costs.eonCostsKrMonth * 12, 'SEK')}/year` : ''}; GitHub (hourly job and the published site) costs nothing: Actions is free for public repositories. Electricity prices and the effektavgift are set on the <a href="#meter">Meter</a> tab.</div>
     </div>`;
 
   drawPriceLadder($('#economics-ladder'), last12, price);
@@ -1964,6 +2058,88 @@ function winterCheckHtml(rows, unlimited, t, last12) {
     <div class="subtle">Other ceilings in winter ${esc(latest.winter)}: ${levels.map((l) => `${fmtNum(l.kw, 0)} kW ${fmtSigned(l.netKr, 'SEK')}`).join(' · ')}. The chargers’ demand is their unlimited estimate from the charge records, on top of the measured rest of the club. Held-back charging is often only delayed (cars stay plugged in for hours), so its margin (${fmtNum(marginPerKwh, 2)} kr/kWh, revenue minus electricity) is the most the ceiling can cost.</div>`;
 }
 
+function nightOffHtml(rows, t, last12) {
+  if (!rows.length) return '<p class="subtle">Needs the E.ON meter values.</p>';
+  const marginPerKwh = last12.kwh > 0 ? (last12.revenue - last12.energyCost) / last12.kwh : 0;
+  const windows = [[22, 6], [23, 6], [21, 7]].map(([from, to]) => nightOffCheck(rows, { from, to, krPerKw: t.krPerKw, marginPerKwh }));
+  const main = windows[0];
+  const worth = main.netPerYear > 0;
+  return `
+    <div class="notice ${worth ? '' : 'warn'}"><h3>${worth ? '<span class="ok">✓ Worth it</span>' : '✕ Not worth it on the data so far'}</h3>
+      Off between 22 and 06 would have saved <strong>${fmtMoney(main.savedPerYear, 'SEK')} a year</strong> in effektavgift (${fmtMoney(main.savedKr, 'SEK')} over ${main.months} months${main.savingMonths.length ? `, all in ${esc(main.savingMonths.map((m) => monthLabel(m.month)).join(', '))}` : ''}), against up to <strong>${fmtMoney(main.lostPerYear, 'SEK')} a year</strong> of charging margin lost (${fmtNum(main.nightShare * 100, 1)}% of all charging happens then). The costly peaks with the chargers are in the <strong>daytime</strong>, when golfers are on the course: at night the chargers have almost never landed in the month’s peak hour, even in the irrigation season.</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Chargers off</th><th class="num">Effektavgift saved / year</th><th class="num">Charging at night</th><th class="num">Margin lost / year (at most)</th><th class="num">Net / year</th></tr></thead>
+      <tbody>${windows.map((w) => `<tr><td>${String(w.from).padStart(2, '0')}–${String(w.to).padStart(2, '0')}</td><td class="num">${fmtMoney(w.savedPerYear, 'SEK')}</td><td class="num">${fmtNum(w.nightKwh, 0)} kWh (${fmtNum(w.nightShare * 100, 1)}%)</td><td class="num">${fmtMoney(-w.lostPerYear, 'SEK')}</td><td class="num"><strong class="${w.netPerYear >= 0 ? 'ok' : 'bad'}">${fmtSigned(w.netPerYear, 'SEK')}</strong></td></tr>`).join('')}</tbody>
+    </table></div>
+    <p class="subtle">Night charging is mostly guests who leave the car overnight (camping, cabins). A night stop would turn them away for little gain; the measures that pay are aimed at the daytime peaks: the whole-facility ceiling in the season (issue #6) and the winter ceiling above.</p>
+    <p><strong>Can we set the schedule ourselves in ChargeNode?</strong> ChargeNode has said in e-mails that a power schedule for the chargers can be set, with a lower limit at certain times of day (for example one ceiling in the daytime and another in the evening). So far they have set every change on request; whether the club can change the schedule itself in the ChargeNode portal is not confirmed. Ask ChargeNode for that access when sending the next limit e-mail.</p>`;
+}
+
+function contractsHtml() {
+  const [now, before] = BILL;
+  const total = billTotal(now);
+  const ore = (kr) => (kr / now.kwh) * 100;
+  const retailOre = ore(now.retail);
+  const sensitivity = [2, 5, 10].map((o) => `${o} öre/kWh less = <strong>${fmtMoney((now.kwh * o) / 100, 'SEK')}</strong> a year`);
+  return `
+    <p>Over ${esc(now.period)} the facility used <strong>${fmtNum(now.kwh, 0)} kWh</strong> and the bill came to <strong>${fmtMoney(total, 'SEK')}</strong> excl. VAT (${fmtNum(total / now.kwh, 2)} kr/kWh). Only the electricity contract is open to negotiation:</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Part</th><th class="num">kr</th><th class="num">Share</th><th class="num">öre/kWh</th><th>Negotiable?</th><th>How to lower it</th></tr></thead>
+      <tbody>${BILL_PARTS.map((p) => `<tr><td>${esc(p.label)}</td><td class="num">${fmtMoney(now[p.key], 'SEK')}</td><td class="num">${Math.round((now[p.key] / total) * 100)}%</td><td class="num">${fmtNum(ore(now[p.key]), 1)}</td><td>${p.negotiable === 'yes' ? '<span class="ok">Yes</span>' : 'No'}</td><td class="subtle">${esc(p.how)}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <p><strong>The grid (E.ON Elnät): no rebate to negotiate.</strong> The grid is a monopoly and its tariffs are regulated by Energimarknadsinspektionen; E.ON must charge every customer on the same tariff the same way, so a discount on the nätavgift is not possible. What the club controls is the monthly peak (${Math.round((now.effekt / total) * 100)}% of the bill), and whether the tariff and fuse size still fit, which is worth checking with E.ON Elnät if the peaks fall a lot.</p>
+    <p><strong>The electricity contract: worth comparing.</strong> It is the largest part, ${Math.round((now.retail / total) * 100)}% of the bill, and averaged <strong>${fmtNum(retailOre, 1)} öre/kWh</strong> (${fmtNum(ore(before.retail), 1)} öre the year before). That covers the quarter-hour spot price plus E.ON’s surcharge, fees and certificates, and it follows the market, so it cannot be compared with a fixed price directly. What can be compared is the <strong>surcharge and the fixed fees</strong> on a spot-price contract. Ask E.ON what they are on the current P15M contract, then get offers from a few other retailers for the same kind of contract. Every öre counts across the year: ${sensitivity.join(' · ')}.</p>
+    <p class="subtle">A fixed price only pays if the market rises; with a spot price the club also benefits from the cheap hours, especially with a battery or solar later. The quarter-hour price means each 15 minutes is priced separately, so moving flexible loads (golf carts, the irrigation start) to cheap quarters also helps a little.</p>
+    <h3 style="margin-top:14px">From ${esc(limitDate(GRID_2027.from))}: E.ON Elnät’s new grid prices</h3>
+    <ul>${GRID_2027.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>
+    ${grid2027Html(now)}`;
+}
+
+// The 2027 grid price list applied to the last 12 months' usage. The spot
+// share of the energy fee needs the spot price; the contract's average price
+// is used as an upper bound for it (it includes the retailer's surcharge).
+function grid2027Html(now) {
+  const g = GRID_2027;
+  const kwMonths = now.effekt / g.krPerKw2026;
+  const effekt27 = kwMonths * g.krPerKw;
+  const fixed27 = g.fixedKrMonth * 12;
+  const retailOre = (now.retail / now.kwh) * 100;
+  const energyOre27 = g.energyOre + (g.energySpotPct / 100) * retailOre;
+  const energy27 = (now.kwh * energyOre27) / 100;
+  const nowEnergyOre = (now.gridEnergy / now.kwh) * 100;
+  const rows = [
+    ['Effektavgift', `${fmtNum(g.krPerKw2026, 2)} kr/kW`, `${fmtNum(g.krPerKw, 2)} kr/kW`, now.effekt, effekt27],
+    ['Grid energy fee', `${fmtNum(nowEnergyOre, 1)} öre/kWh (measured)`, `${fmtNum(g.energyOre, 2)} öre + ${fmtNum(g.energySpotPct, 1)} % of spot ≈ ${fmtNum(energyOre27, 1)} öre`, now.gridEnergy, energy27],
+    ['Fixed fee', `${fmtNum(g.fixedKrMonth2026, 0)} kr/month`, `${fmtNum(g.fixedKrMonth, 0)} kr/month`, now.gridFixed, fixed27],
+  ];
+  const before = rows.reduce((s, r) => s + r[3], 0);
+  const after = rows.reduce((s, r) => s + r[4], 0);
+  return `
+    <h3 style="margin-top:14px">From ${esc(limitDate(g.from))}: E.ON Elnät’s 2027 prices (${esc(g.tariff)})</h3>
+    <ul>${g.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Grid part</th><th>Now</th><th>2027</th><th class="num">Last 12 months</th><th class="num">Same usage, 2027 prices</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr><td>${esc(r[0])}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td><td class="num">${fmtMoney(r[3], 'SEK')}</td><td class="num">${fmtMoney(r[4], 'SEK')}</td></tr>`).join('')}
+        <tr><td><strong>Grid in total</strong></td><td></td><td></td><td class="num"><strong>${fmtMoney(before, 'SEK')}</strong></td><td class="num"><strong>${fmtMoney(after, 'SEK')}</strong> (${fmtSigned(after - before, 'SEK')})</td></tr>
+      </tbody>
+    </table></div>
+    <p>At the same usage and peaks the grid would cost about <strong>${fmtSigned(after - before, 'SEK')} a year</strong>, mostly from the higher effektavgift, so every kW cut from the peak is worth ${fmtNum(g.krPerKw * 12, 0)} kr a year instead of ${fmtNum(g.krPerKw2026 * 12, 0)} kr. The energy fee stays about the same on average, but now follows the spot price: electricity used in cheap quarters (nights, windy and sunny hours) is cheaper in both the contract and the grid fee, and expensive winter mornings cost more in both. <span class="subtle">The spot share is estimated with the contract’s average price (${fmtNum(retailOre, 1)} öre/kWh), which includes the retailer’s surcharge, so the real 2027 energy fee should be a little lower.</span></p>
+    <p class="subtle"><strong>Reactive power:</strong> ${esc(g.reactive)} The club has a 125 A fuse, so it pays nothing for reactive power, even with the irrigation pumps. Production above 43.5 kW will pay a grid energy fee from 2027, which matters for solar (below).</p>`;
+}
+
+function solarHtml() {
+  const kwh = (kwp) => kwp * SOLAR.yieldKwhPerKwp;
+  return `
+    <p>The energy analysis looked at solar on the club’s east–west roofs (about ${fmtNum(SOLAR.yieldKwhPerKwp, 0)} kWh per kWp a year):</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Roof</th><th class="num">Size</th><th class="num">Production / year</th><th class="num">Value / year (analysis)</th></tr></thead>
+      <tbody>${SOLAR.options.map((s) => `<tr><td>${esc(s.roof)}</td><td class="num">${fmtNum(s.kwp, 0)} kWp</td><td class="num">${fmtNum(kwh(s.kwp), 0)} kWh</td><td class="num">≈ ${fmtMoney(s.krPerYear, 'SEK')}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <p><strong>Where solar helps most: used on site, in the daytime season.</strong> Each solar kWh the club uses itself replaces a bought kWh with everything on top of it: the electricity contract, the grid energy fee and the energy tax, together about ${fmtNum(((BILL[0].retail + BILL[0].gridEnergy + BILL[0].tax) / BILL[0].kwh), 2)} kr/kWh excl. VAT over the last 12 months. A kWh sent out to the grid only earns the spot price. So the panels pay best when the facility is using power while the sun shines, and it is: from March to October the clubhouse, restaurant, cold rooms and golf carts draw most between 09 and 15 (see “When do the peaks happen” on the <a href="#meter">Meter</a> tab), and east–west roofs spread the production over exactly those hours. The chargers fit too: golfers charge while they play, in the middle of the day.</p>
+    <p><strong>What solar does not do reliably: lower the peak.</strong> The effektavgift is set by the month’s single highest hour, and one cloudy busy day is enough to set it without help from the panels. Solar lowers the energy part of the bill; the peak needs the ceilings (and later perhaps a battery, which the energy analysis also looked at). In winter, when the heating sets the peaks, solar produces little.</p>
+    <p><strong>Keep the export at or below ${fmtNum(SOLAR.exportCapKw, 1)} kW.</strong> From 2027 production above 43.5 kW pays a grid energy fee, and the energy analysis already limits the export to ${fmtNum(SOLAR.exportCapKw, 1)} kW at the meter. The smaller office roof would be used almost entirely on site; the barn roof would export more around midday in summer, so it gains most from using that power on site (charging, cooling, a battery).</p>`;
+}
+
 // A price ladder: the break-even prices, the market band and the current price on one kr/kWh axis.
 function drawPriceLadder(container, acc, price) {
   if (!container || acc.breakEven.none === null) return;
@@ -2037,11 +2213,11 @@ async function renderGuide() {
     <div class="card">
       <h3>Flikarna</h3>
       <dl class="kv">
-        <dt><a href="#live">Live</a></dt><dd>Vilka laddare som laddar, är lediga eller ur funktion vid senaste hämtningen.</dd>
-        <dt><a href="#records">Records</a></dt><dd>Alla laddningar: antal, kWh, intäkt, tid inkopplad. Kan laddas ner som Excel-fil (CSV).</dd>
+        <dt><a href="#overview">Overview</a></dt><dd>Startsidan: månadens högsta timme i år, hur mycket av den som var laddarna, och gränsen som gäller nu.</dd>
+        <dt><a href="#meter">Meter</a></dt><dd>Det E.ON faktiskt mätt för hela anläggningen, när topparna kommer och vad som troligen orsakar dem, gränserna och vad elen kostar.</dd>
         <dt><a href="#analysis">Analysis</a></dt><dd>Hur många som laddar samtidigt, vilka timmar som är mest belastade och hur stor effekttopp <em>laddarna själva</em> skapar.</dd>
-        <dt><a href="#meter">Meter</a></dt><dd>Det E.ON faktiskt mätt för hela anläggningen, hur mycket av varje topp som var laddarna, gränserna och vad elen kostar.</dd>
-        <dt><a href="#chargers">Chargers</a></dt><dd>Laddarna och deras uttag.</dd>
+        <dt><a href="#economics">Economics</a></dt><dd>Vad laddarna drar in och kostar, om priset är rätt, vad nattstopp och vintertak ger, och vad som går att förhandla i elavtalen.</dd>
+        <dt><a href="#live">Chargers</a></dt><dd>Laddarna: <em>Live</em> (vilka som laddar just nu), <em>Records</em> (alla laddningar, kan laddas ner som Excel-fil) och <em>Charging points</em> (laddpunkterna och deras uttag).</dd>
         <dt><a href="#connection">Connection</a></dt><dd>Teknisk felsökning: vad ChargeNode och E.ON svarade.</dd>
       </dl>
     </div>

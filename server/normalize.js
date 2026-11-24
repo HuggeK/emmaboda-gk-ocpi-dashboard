@@ -131,7 +131,8 @@ export function normalizeCdr(cdr) {
   const start = cdr.start_date_time || null;
   const end = cdr.end_date_time || cdr.stop_date_time || null;
   let durationHours = num(cdr.total_time);
-  if (durationHours === null && start && end) {
+  // ChargeNode sends total_time 0; fall back to the plugged-in time.
+  if (!(durationHours > 0) && start && end) {
     durationHours = (Date.parse(end) - Date.parse(start)) / 3_600_000;
   }
   return {

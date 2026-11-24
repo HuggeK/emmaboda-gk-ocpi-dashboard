@@ -4,6 +4,7 @@ import {
   hourlyProfile,
   monthlyPeaks,
   rateFromRecords,
+  isWinter,
   revenueByMonth,
   LIMIT_HISTORY,
   SEASON_PLAN,
@@ -12,7 +13,8 @@ import {
   MAIN_FUSE_KW,
   DEFAULT_OPTIONS as ANALYSIS_DEFAULTS,
 } from './analysis.js';
-import { DEFAULT_TARIFF, meterHours, splitHours, dailyPeaks, monthlyMeter, summarize, seasonalPicture, rateFromMeter } from './meter.js';
+import { DEFAULT_TARIFF, meterHours, splitHours, dailyPeaks, monthlyMeter, summarize, seasonalPicture, rateFromMeter, monthlyTopHours, typicalDay } from './meter.js';
+import { FACILITY_LOADS, BASE_LOAD_KW, explainPeak, inHours, loadLabel } from './facility.js';
 import { DEFAULT_COSTS, MARKET_BAND, account, limitSavings, priceAdvice, winterCeilingCheck } from './economics.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -1009,7 +1011,7 @@ function drawMonthlyChart(container, months, options) {
 // --------------------------------------------------------------------- limits
 // The limits on the chargers and the facility, shared by the Analysis, Meter
 // and guide tabs. 'actual' is what ChargeNode had configured at the time.
-const TARIFF_KEY = 'emgk.tariff.v1';
+const TARIFF_KEY = 'emgk.tariff.v2'; // v2: tariff from the energy analysis (120.80 kr/kW, 709 kr/month)
 
 function loadTariff() {
   try {
@@ -1234,6 +1236,7 @@ async function renderMeter() {
   const meter = meterHours(inst);
   const rangeMs = { from: range.from.getTime(), to: range.to.getTime() };
   const rows = splitHours(meter, chargerProfile, rangeMs, o);
+  const allRows = splitHours(meter, chargerProfile, null, o); // the peak-timing card uses every year
   const inRange = records.filter((r) => {
     const t = Date.parse(r.start || r.end || '');
     return t >= rangeMs.from && t < rangeMs.to;
@@ -1299,6 +1302,7 @@ async function renderMeter() {
       <div class="chart" id="meter-power"></div>
       <div class="table-wrap power-table">${powerTableHtml(points, hourly)}</div>
     </div>
+    ${peakTimingHtml(allRows)}
     <div class="card">
       <div class="card-head"><h3>Billed peak per month (kW): the chargers’ part and everything else</h3><span class="subtle">${t.peakCount > 1 ? `average of the ${t.peakCount} highest hours on different days` : 'the highest hour of the month'} · lighter bars are partial months · dashes mark the limit in force</span></div>
       ${seriesLegendHtml()}
@@ -1353,6 +1357,7 @@ async function renderMeter() {
     </div>`;
 
   drawPowerChart($('#meter-power'), points, { hourly });
+  drawPeakTiming(allRows);
   drawMeterMonths($('#meter-months'), months);
 
   bindLimitControls('meter');
@@ -1401,6 +1406,175 @@ async function renderMeter() {
     paint();
   });
   paint();
+}
+
+// ------------------------------------------------------- when are the peaks
+// When in the day the facility's peaks happen, and which of the club's loads
+// probably cause them. Only the total is measured; the chargers' part is
+// estimated and the rest is inferred from timing (see facility.js).
+const CONFIDENCE_TEXT = {
+  measured: 'measured',
+  estimated: 'estimated',
+  likely: 'likely',
+  possible: 'possible',
+  unknown: 'unclear',
+};
+
+function confidenceChip(confidence) {
+  return `<span class="conf conf-${esc(confidence)}">${esc(CONFIDENCE_TEXT[confidence] || confidence)}</span>`;
+}
+
+const hourRange = ([from, to]) => `${String(from).padStart(2, '0')}–${String(to).padStart(2, '0')}`;
+
+function causeHtml(cause) {
+  const kw = cause.key === 'chargers' ? ` ≈ ${fmtNum(cause.kw, 0)} kW` : cause.key === 'irrigation' ? ' ≈ 19 kW' : '';
+  return `${esc(loadLabel(cause.key))}${kw} ${confidenceChip(cause.confidence)}`;
+}
+
+function peakTimingHtml(rows) {
+  if (!rows.length) return '';
+  const tops = monthlyTopHours(rows, 3).filter((t) => t.complete);
+  if (!tops.length) return '';
+  const explained = tops.map((t) => ({ ...t, why: explainPeak(t, { isWinter }) }));
+  const share = (f) => Math.round((explained.filter(f).length / explained.length) * 100);
+  const nightSeason = share((t) => !t.why.winter && inHours(t.why.hour, [22, 3]));
+  const day = share((t) => inHours(t.why.hour, [9, 15]));
+  const withChargers = share((t) => t.chargerKw >= 1);
+  const firstMonth = explained[0].month;
+  const lastMonth = explained.at(-1).month;
+  const firsts = explained.filter((t) => t.rank === 1);
+  return `
+    <div class="card" id="peak-timing-card">
+      <div class="card-head"><h3>When do the peaks happen, and what causes them?</h3><span class="subtle">every complete month with meter values, ${esc(monthLabel(firstMonth))} – ${esc(monthLabel(lastMonth))}</span></div>
+      <div class="notice warn"><h3>How sure is this?</h3>Only the <strong>total</strong> is measured: E.ON’s meter sees the whole facility as one number per hour. The chargers’ part is <strong>estimated</strong> from their charge records. Everything else is <strong>inferred from the time of day and season</strong>, using the loads described in the club’s energy analysis (July 2026). No other load is metered separately, so a label means “fits the timing and size”, not “measured”. ${confidenceChip('likely')} timing and size both match the analysis · ${confidenceChip('possible')} the timing matches, but other loads run then too · ${confidenceChip('unknown')} no load in the analysis explains it.</div>
+      <p>Of the three highest hours in each month, <strong>${nightSeason}%</strong> fell at night between 22 and 03 in the season, which is when the irrigation pumps run, and <strong>${day}%</strong> in the daytime between 09 and 15. The chargers were running in <strong>${withChargers}%</strong> of them.</p>
+      <div class="grid typical-days">
+        <div><div class="card-head"><h3>A typical day in the season</h3><span class="subtle">1 Mar – 25 Oct</span></div><div class="chart" id="typical-season"></div></div>
+        <div><div class="card-head"><h3>A typical day in winter</h3><span class="subtle">26 Oct – 28 Feb</span></div><div class="chart" id="typical-winter"></div></div>
+      </div>
+      <div class="series-legend">
+        <span><i class="swatch other"></i>Rest of the club, average kW</span>
+        <span><i class="swatch chargers"></i>Chargers, average kW (estimated)</span>
+        <span><i class="swatch p95"></i>Rest of the club on a busy day (95th percentile)</span>
+        <span><i class="swatch base"></i>Base load ≈ ${fmtNum(BASE_LOAD_KW, 1)} kW</span>
+        <span><i class="swatch band"></i>When a load probably runs</span>
+      </div>
+      <div class="card-head" style="margin-top:12px"><h3>At what time of day the monthly peaks happened</h3><span class="subtle">the 3 highest hours of every month, ${explained.length} hours</span></div>
+      <div class="chart" id="peak-hours"></div>
+      <div class="series-legend">
+        <span><i class="swatch chargers"></i>Chargers were running</span>
+        <span><i class="swatch other"></i>No charging</span>
+        <span><i class="swatch band"></i>When a load probably runs</span>
+      </div>
+      <details><summary>The highest hour of each month and its likely cause (${firsts.length} months)</summary>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Month</th><th>Hour</th><th class="num">Measured</th><th class="num">Above base load</th><th>Likely cause</th></tr></thead>
+          <tbody>${firsts.slice().reverse().map((t) => `<tr>
+            <td>${esc(monthLabel(t.month))}</td>
+            <td>${esc(new Date(t.at).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' }))} ${esc(hourLabel(t.why.hour))}</td>
+            <td class="num">${fmtNum(t.meterKw, 1)} kW</td>
+            <td class="num">${fmtNum(t.why.aboveBaseKw, 1)} kW</td>
+            <td>${t.why.causes.map(causeHtml).join('<br>')}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+      </details>
+      <details><summary>The loads, as described in the energy analysis</summary>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Load</th><th>When</th><th>What we know</th><th>Confidence</th></tr></thead>
+          <tbody>${FACILITY_LOADS.map((l) => `<tr><td>${esc(l.label)}</td><td>${l.hours ? `${hourRange(l.hours)}${l.season === 'all' ? '' : `, ${l.season === 'winter' ? 'winter' : 'season'}`}` : 'around the clock'}</td><td>${esc(l.detail)}</td><td>${confidenceChip(l.confidence)}</td></tr>`).join('')}</tbody>
+        </table></div>
+      </details>
+    </div>`;
+}
+
+function drawPeakTiming(rows) {
+  if (!$('#peak-timing-card')) return;
+  const season = typicalDay(rows, (r) => !isWinter(r.at));
+  const winter = typicalDay(rows, (r) => isWinter(r.at));
+  const maxKw = Math.max(...[...season, ...winter].map((h) => Math.max(h.otherP95, h.otherAvg + h.chargersAvg)));
+  const bands = (s) => FACILITY_LOADS.filter((l) => l.hours && l.season === s);
+  drawTypicalDay($('#typical-season'), season, bands('season'), maxKw);
+  drawTypicalDay($('#typical-winter'), winter, bands('winter'), maxKw);
+  drawPeakHours($('#peak-hours'), monthlyTopHours(rows, 3).filter((t) => t.complete));
+}
+
+// Background bands for the hours a load probably runs, with its label on top.
+function loadBands(loads, x, pad, H, slot) {
+  return loads.map((l, row) => {
+    const [from, to] = l.hours;
+    const spans = from <= to ? [[from, to]] : [[from, 24], [0, to]];
+    const rects = spans.map(([a, b]) => `<rect class="load-band" x="${x(a)}" y="${pad.t}" width="${(b - a) * slot}" height="${H - pad.t - pad.b}"></rect>`).join('');
+    const [a, b] = spans[0];
+    const season = l.season === 'all' ? '' : l.season === 'winter' ? ' (winter)' : ' (season)';
+    // A band near the right edge gets its label right-aligned so it is not cut off.
+    const right = a >= 16;
+    return `${rects}<text class="tick band-label" x="${right ? x(b) - 3 : x(a) + 3}" y="${pad.t - 6 - row * 13}" text-anchor="${right ? 'end' : 'start'}">${esc(l.label)}${season} · ${esc(CONFIDENCE_TEXT[l.confidence])}</text>`;
+  }).join('');
+}
+
+function drawTypicalDay(container, day, bands, maxKw) {
+  if (!container) return;
+  const W = 480;
+  const H = 250;
+  const pad = { l: 34, r: 6, t: 32, b: 22 };
+  const { y, grid, base } = kwFrame(maxKw, W, H, pad);
+  const slot = (W - pad.l - pad.r) / 24;
+  const x = (h) => pad.l + h * slot;
+  const bars = day.map((h, i) => {
+    const bx = x(i) + 1;
+    const w = slot - 2;
+    const p95 = `<line class="p95-mark" x1="${bx}" x2="${bx + w}" y1="${y(h.otherP95)}" y2="${y(h.otherP95)}"></line>`;
+    const label = i % 3 === 0 ? `<text class="tick" x="${bx + w / 2}" y="${H - 6}" text-anchor="middle">${String(i).padStart(2, '0')}</text>` : '';
+    return `<g data-index="${i}"><rect class="bar-hit" x="${x(i)}" y="${pad.t}" width="${slot}" height="${base - pad.t}"></rect>${stackedBar(bx, w, y, base, h.otherAvg, h.chargersAvg, false)}${p95}${label}</g>`;
+  }).join('');
+  container.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Average power per clock hour, rest of the club and chargers">
+    ${loadBands(bands, x, pad, H, slot)}${grid}
+    <line class="axis-line" x1="${pad.l}" x2="${W - pad.r}" y1="${base}" y2="${base}"></line>
+    ${bars}
+    <line class="base-line" x1="${pad.l}" x2="${W - pad.r}" y1="${y(BASE_LOAD_KW)}" y2="${y(BASE_LOAD_KW)}"></line>
+  </svg>`;
+  attachTooltip(container, (i) => {
+    const h = day[i];
+    return `<strong>${hourLabel(i)}–${hourLabel((i + 1) % 24)}</strong>rest of the club ${fmtNum(h.otherAvg, 1)} kW on average, ${fmtNum(h.otherP95, 1)} kW on a busy day<br>chargers ${fmtNum(h.chargersAvg, 1)} kW on average (estimated)<br>${h.n} hours measured`;
+  });
+}
+
+function drawPeakHours(container, tops) {
+  if (!container) return;
+  const counts = Array.from({ length: 24 }, () => ({ with: 0, without: 0, months: [] }));
+  for (const t of tops) {
+    const c = counts[new Date(t.at).getHours()];
+    if (t.chargerKw >= 1) c.with += 1;
+    else c.without += 1;
+    c.months.push(t.month);
+  }
+  const W = 960;
+  const H = 230;
+  const bands = FACILITY_LOADS.filter((l) => l.hours);
+  const pad = { l: 34, r: 10, t: 14 + bands.length * 13, b: 22 };
+  const max = Math.max(1, ...counts.map((c) => c.with + c.without));
+  const step = max > 10 ? 5 : max > 4 ? 2 : 1;
+  const top = Math.ceil(max / step) * step;
+  const y = (v) => H - pad.b - (v / top) * (H - pad.t - pad.b);
+  const base = H - pad.b;
+  const slot = (W - pad.l - pad.r) / 24;
+  const x = (h) => pad.l + h * slot;
+  const grid = Array.from({ length: top / step + 1 }, (_, i) => i * step).map((v) => `<line class="grid-line" x1="${pad.l}" x2="${W - pad.r}" y1="${y(v)}" y2="${y(v)}"></line><text class="tick" x="${pad.l - 6}" y="${y(v) + 4}" text-anchor="end">${v}</text>`).join('');
+  const bars = counts.map((c, i) => {
+    const bx = x(i) + 3;
+    const w = slot - 6;
+    return `<g data-index="${i}"><rect class="bar-hit" x="${x(i)}" y="${pad.t}" width="${slot}" height="${base - pad.t}"></rect>${stackedBar(bx, w, y, base, c.without, c.with, false)}<text class="tick" x="${bx + w / 2}" y="${H - 6}" text-anchor="middle">${String(i).padStart(2, '0')}</text></g>`;
+  }).join('');
+  container.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Number of monthly peak hours per clock hour, with and without charging">
+    ${loadBands(bands, x, pad, H, slot)}${grid}
+    <line class="axis-line" x1="${pad.l}" x2="${W - pad.r}" y1="${base}" y2="${base}"></line>
+    ${bars}
+  </svg>`;
+  attachTooltip(container, (i) => {
+    const c = counts[i];
+    const n = c.with + c.without;
+    return `<strong>${hourLabel(i)}–${hourLabel((i + 1) % 24)}: ${n} peak hour${n === 1 ? '' : 's'}</strong>${c.with} with the chargers running, ${c.without} without${n ? `<br>${esc([...new Set(c.months)].map((m) => monthLabel(m, 'short')).join(', '))}` : ''}`;
+  });
 }
 
 function seriesLegendHtml(lang = 'en') {

@@ -12,7 +12,7 @@ import {
   DEFAULT_OPTIONS as ANALYSIS_DEFAULTS,
 } from './analysis.js';
 import { DEFAULT_TARIFF, meterHours, splitHours, dailyPeaks, monthlyMeter, summarize, seasonalPicture } from './meter.js';
-import { DEFAULT_COSTS, MARKET_BAND, account, limitSavings, priceAdvice } from './economics.js';
+import { DEFAULT_COSTS, MARKET_BAND, account, limitSavings, priceAdvice, winterCeilingCheck } from './economics.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -1553,10 +1553,14 @@ async function renderEconomics() {
   const inst = eon?.configured ? (eon.installations || []).find((i) => i.hourly) : null;
   let meterMonths = [];
   let savings = [];
+  let meterRows = [];
+  let unlimitedProfile = null;
   if (inst) {
     const rows = splitHours(meterHours(inst), profile, null, o);
     meterMonths = monthlyMeter(rows, { tariff: t, revenue: revenueByMonth(records), now: referenceTime().getTime(), capOptions: o });
-    savings = limitSavings(rows, hourlyProfile(records, { ...o, limits: 'none' }), { krPerKw: t.krPerKw });
+    unlimitedProfile = hourlyProfile(records, { ...o, limits: 'none' });
+    meterRows = rows;
+    savings = limitSavings(rows, unlimitedProfile, { krPerKw: t.krPerKw });
   }
   const periods = economicsPeriods(records);
   const accounts = periods.map((p) => ({ period: p, acc: account({ records, period: p, tariff: t, costs, points, chargerMonths, meterMonths }) }));
@@ -1610,6 +1614,11 @@ async function renderEconomics() {
     </div>
 
     <div class="card">
+      <div class="card-head"><h3>Is the winter ceiling worth the e-mail?</h3><span class="subtle">26 Oct – 28 Feb, whole facility ≤ ${fmtNum(SEASON_PLAN.winter.kw, 1)} kW</span></div>
+      ${winterCheckHtml(meterRows, unlimitedProfile, t, last12)}
+    </div>
+
+    <div class="card">
       <div class="card-head"><h3>Costs</h3><span class="subtle">kr excl. VAT · saved in this browser</span></div>
       <form class="filters tariff-form" id="economics-costs">
         <label title="ChargeNode's fixed fee per charging point and month, from the contract">ChargeNode <input type="number" name="chargeNodePerPointMonth" value="${costs.chargeNodePerPointMonth}" step="1" min="0"> kr/point/month</label>
@@ -1654,11 +1663,12 @@ function savingsHtml(savings, chargerMonths, maxChargerPeak, t) {
   const added = savings.reduce((s, m) => s + m.addedKr, 0);
   return `${modelNote}
     <p>With the meter values: in the months below the chargers added <strong>${fmtMoney(added, 'SEK')}</strong> to the effektavgift; without any limit they would have added <strong>${fmtMoney(added + total, 'SEK')}</strong>. The limits saved <strong>${fmtMoney(total, 'SEK')}</strong> (excl. VAT, ${fmtNum(t.krPerKw, 0)} kr/kW, the highest hour per month).</p>
+    <details><summary>Per month (${savings.length} months)</summary>
     <div class="table-wrap"><table>
       <thead><tr><th>Month</th><th>Limit</th><th class="num">Peak without chargers</th><th class="num">Actual peak</th><th class="num">Peak if unlimited</th><th class="num">Chargers added</th><th class="num">Saved by the limit</th></tr></thead>
       <tbody>${savings.map((m) => `<tr>
         <td>${esc(monthLabel(m.month))}</td>
-        <td>${limitCellHtml(m.limit)}</td>
+        <td>${limitCellHtml(m.limits)}</td>
         <td class="num">${fmtNum(m.withoutChargersKw, 1)} kW</td>
         <td class="num">${fmtNum(m.actualKw, 1)} kW</td>
         <td class="num">${fmtNum(m.unlimitedKw, 1)} kW</td>
@@ -1666,7 +1676,42 @@ function savingsHtml(savings, chargerMonths, maxChargerPeak, t) {
         <td class="num">${m.savedKr > 0 ? `<span class="ok">${fmtMoney(m.savedKr, 'SEK')}</span>` : fmtMoney(0, 'SEK')}</td>
       </tr>`).join('')}</tbody>
     </table></div>
+    </details>
     <div class="subtle">“If unlimited” puts the chargers’ unlimited estimate on top of the measured rest of the club. The demo and the first months are estimates; the comparison gets better with every month of meter values.</div>`;
+}
+
+// Each past winter: the effektavgift the ceiling saved against the charging
+// it held back, and how other ceiling levels would have done last winter.
+function winterCheckHtml(rows, unlimited, t, last12) {
+  if (!rows.length || !unlimited) return '<p class="subtle">Needs the E.ON meter values; fills in once the hourly job has read them.</p>';
+  const marginPerKwh = last12.kwh > 0 ? (last12.revenue - last12.energyCost) / last12.kwh : 0;
+  const options = { krPerKw: t.krPerKw, marginPerKwh, now: referenceTime().getTime() };
+  // Winters before the chargers existed say nothing.
+  const winters = winterCeilingCheck(rows, unlimited, { ...options, ceilingKw: SEASON_PLAN.winter.kw }).filter((w) => w.chargedKwh > 0);
+  if (!winters.length) return '<p class="subtle">No winter months with meter values yet.</p>';
+  const complete = winters.filter((w) => w.complete);
+  const latest = complete.at(-1) || winters.at(-1);
+  const levels = [20, SEASON_PLAN.winter.kw, 30, 35].map((kw) => ({ kw, ...winterCeilingCheck(rows, unlimited, { ...options, ceilingKw: kw }).find((w) => w.winter === latest.winter) }));
+  const best = levels.reduce((b, l) => (l.netKr > b.netKr ? l : b), levels[0]);
+  const worth = complete.length && complete.every((w) => w.netKr > 0);
+  const verdict = complete.length
+    ? `<div class="notice ${worth ? '' : 'warn'}"><h3>${worth ? '<span class="ok">✓ Worth it</span>' : '⚠️ Not clearly worth it'}</h3>${complete.map((w) => `Winter ${esc(w.winter)}: ${fmtSigned(w.netKr, 'SEK')}`).join(' · ')}. The e-mail takes five minutes; the ceiling saves the effektavgift the chargers would add on top of the club’s winter peak, and costs at most the margin on the charging it holds back.${best.kw !== SEASON_PLAN.winter.kw && best.netKr > levels[1].netKr + 200 ? ` Last winter ${fmtNum(best.kw, 0)} kW would have done better (${fmtSigned(best.netKr, 'SEK')}).` : ''}</div>`
+    : '<p class="subtle">No complete winter with meter values yet.</p>';
+  return `${verdict}
+    <div class="table-wrap"><table>
+      <thead><tr><th>Winter</th><th class="num">Charged</th><th class="num">Effektavgift added, no ceiling</th><th class="num">With the ceiling</th><th class="num">Saved</th><th class="num">Charging held back</th><th class="num">Margin on it (at most)</th><th class="num">Net</th></tr></thead>
+      <tbody>${winters.map((w) => `<tr>
+        <td>${esc(w.winter)}${w.complete ? '' : ' <span class="subtle">(so far)</span>'}</td>
+        <td class="num">${fmtNum(w.chargedKwh, 0)} kWh</td>
+        <td class="num">${fmtMoney(w.addedWithoutKr, 'SEK')}</td>
+        <td class="num">${fmtMoney(w.addedWithKr, 'SEK')}</td>
+        <td class="num">${fmtMoney(w.savedKr, 'SEK')}</td>
+        <td class="num">${fmtNum(w.heldKwh, 0)} kWh (${w.chargedKwh ? Math.round((w.heldKwh / w.chargedKwh) * 100) : 0}%)</td>
+        <td class="num">${fmtMoney(-w.lostMarginKr, 'SEK')}</td>
+        <td class="num"><strong class="${w.netKr >= 0 ? 'ok' : 'bad'}">${fmtSigned(w.netKr, 'SEK')}</strong></td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+    <div class="subtle">Other ceilings in winter ${esc(latest.winter)}: ${levels.map((l) => `${fmtNum(l.kw, 0)} kW ${fmtSigned(l.netKr, 'SEK')}`).join(' · ')}. The chargers’ demand is their unlimited estimate from the charge records, on top of the measured rest of the club. Held-back charging is often only delayed (cars stay plugged in for hours), so its margin (${fmtNum(marginPerKwh, 2)} kr/kWh, revenue minus electricity) is the most the ceiling can cost.</div>`;
 }
 
 // A price ladder: the break-even prices, the market band and the current price on one kr/kWh axis.

@@ -311,7 +311,12 @@ them it is a range from nothing to the worst case (the chargers' own monthly
 peak always on top of the club's). From that it gives the break-even price
 per kWh and a verdict on the current price, and with meter values a table of
 what lowering the limits saved (the chargers' unlimited estimate on top of
-the measured rest of the club, minus the actual peak).
+the measured rest of the club, minus the actual peak). *Is the winter ceiling
+worth the e-mail?* checks every past winter (26 Oct – 28 Feb): the
+effektavgift the chargers would add without the 25 kW whole-facility ceiling,
+minus what they add with it, against the margin on the charging the ceiling
+holds back (an upper bound, since held-back charging is often only delayed),
+and compares 20, 25, 30 and 35 kW for the last winter.
 
 Costs are set on the tab and saved in the browser. ChargeNode does not publish
 its fee to site owners, so it starts at 0 and the tab says it is missing. The

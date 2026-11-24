@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { account, limitSavings, priceAdvice, monthsIn, DEFAULT_COSTS } from '../public/economics.js';
+import { account, limitSavings, priceAdvice, monthsIn, winterCeilingCheck, DEFAULT_COSTS } from '../public/economics.js';
 import { HOUR_MS } from '../public/analysis.js';
 
 const tariff = { retailOre: 80, transferOre: 20, energyTaxOre: 36, fixedKr: 0, krPerKw: 120, peakCount: 1, vatPct: 25 };
@@ -41,6 +41,22 @@ test('priceAdvice: ok, warn (depends on the peaks) and bad', () => {
   assert.equal(priceAdvice({ ...base, effekt: { measured: null, measuredMonths: 0 }, breakEven: { none: 2, expected: 7, worst: 7.8 } }).level, 'warn');
   assert.equal(priceAdvice({ ...base, effekt: { measured: 5000, measuredMonths: 12 }, breakEven: { none: 2, expected: 6, worst: 7.8 } }).level, 'bad');
   assert.match(priceAdvice({ ...base, effekt: { measured: null, measuredMonths: 0 }, breakEven: { none: 2, expected: 3, worst: 4 } }).market, /Within/);
+});
+
+test('winterCeilingCheck: saved effektavgift against the charging the ceiling holds back', () => {
+  const t = new Date(2025, 11, 10, 12).getTime(); // December 2025, a winter month
+  const rows = [
+    { at: t, otherKw: 30, meterKw: 41, chargerKw: 11 }, // the club alone above 25 kW: chargers get nothing
+    { at: t + HOUR_MS, otherKw: 20, meterKw: 31, chargerKw: 11 }, // 5 kW of room
+    { at: new Date(2026, 6, 1, 12).getTime(), otherKw: 40, meterKw: 40, chargerKw: 0 }, // summer: ignored
+  ];
+  const unlimited = new Map([[t, { rawKw: 11 }], [t + HOUR_MS, { rawKw: 11 }]]);
+  const [w] = winterCeilingCheck(rows, unlimited, { ceilingKw: 25, krPerKw: 100, marginPerKwh: 2, now: new Date(2026, 5, 1).getTime() });
+  assert.equal(w.winter, '2025/26');
+  assert.equal(w.addedWithoutKr, 11 * 100); // peak 41 instead of 30
+  assert.equal(w.addedWithKr, 0); // with the ceiling the peak stays 30
+  assert.equal(w.heldKwh, 11 + 6);
+  assert.equal(w.netKr, 1100 - 17 * 2);
 });
 
 test('limitSavings: what the chargers would have added unlimited, minus what they added', () => {

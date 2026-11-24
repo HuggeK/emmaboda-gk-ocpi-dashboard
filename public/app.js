@@ -3,6 +3,7 @@ import {
   analyze,
   hourlyProfile,
   monthlyPeaks,
+  rateFromRecords,
   revenueByMonth,
   LIMIT_HISTORY,
   SEASON_PLAN,
@@ -11,7 +12,7 @@ import {
   MAIN_FUSE_KW,
   DEFAULT_OPTIONS as ANALYSIS_DEFAULTS,
 } from './analysis.js';
-import { DEFAULT_TARIFF, meterHours, splitHours, dailyPeaks, monthlyMeter, summarize, seasonalPicture } from './meter.js';
+import { DEFAULT_TARIFF, meterHours, splitHours, dailyPeaks, monthlyMeter, summarize, seasonalPicture, rateFromMeter } from './meter.js';
 import { DEFAULT_COSTS, MARKET_BAND, account, limitSavings, priceAdvice, winterCeilingCheck } from './economics.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -50,6 +51,10 @@ const state = {
   },
   economics: {
     costs: loadCosts(),
+  },
+  rate: {
+    auto: true, // charging power measured from the data; false when set by hand
+    estimate: undefined, // { kw, n, source, low?, high? } or null, set on first load
   },
   chargerCount: 0,
 };
@@ -723,6 +728,9 @@ const hourLabel = (h) => `${String(h).padStart(2, '0')}:00`;
 async function renderAnalysis() {
   const root = $('#view-analysis');
   const a = state.analysis;
+  if (!root.dataset.rendered) root.innerHTML = '<div class="loading">Analysing charge records...</div>';
+  await loadMeterInputs().catch(() => null); // the measured charging power
+  root.dataset.rendered = '1';
   const o = a.options;
   const range = analysisRange(a.preset);
   root.innerHTML = `
@@ -733,7 +741,7 @@ async function renderAnalysis() {
     <div class="filters" id="analysis-filters">
       ${ANALYSIS_PRESETS.map((p) => `<button class="chip ${p.key === a.preset ? 'active' : ''}" data-preset="${p.key}">${p.label}</button>`).join('')}
       <span class="custom">
-        <label title="Power one car is assumed to draw while it is actually charging. 11 kW is a three-phase 16 A car, 7.4 kW single-phase, 22 kW three-phase 32 A. ChargeNode only reports energy totals, so this decides how long each session's energy took to deliver.">Car charges at <input type="number" id="analysis-rate" value="${o.rateKw}" min="1" max="22" step="0.1"> kW</label>
+        ${rateControlHtml('analysis', o)}
         ${limitControlsHtml('analysis', o)}
         <label title="What the grid company charges per kW of the month's billed peak.">Tariff <input type="number" id="analysis-kr" value="${o.krPerKw}" min="0" step="1"> kr/kW</label>
         ${peakCountSelectHtml('analysis-peaks', o.peakCount)}
@@ -745,6 +753,7 @@ async function renderAnalysis() {
     <div id="analysis-body"><div class="loading">Analysing charge records...</div></div>`;
 
   bindLimitControls('analysis');
+  bindRateControl('analysis');
   $('#analysis-filters').addEventListener('click', (event) => {
     const chip = event.target.closest('[data-preset]');
     if (chip) {
@@ -752,11 +761,10 @@ async function renderAnalysis() {
       renderAnalysis();
     }
     if (event.target.id === 'analysis-apply') {
-      const rate = Number($('#analysis-rate').value);
       a.options = {
         ...o,
         ...readLimitControls('analysis'),
-        rateKw: rate > 0 ? rate : ANALYSIS_DEFAULTS.rateKw,
+        rateKw: readRateControl('analysis'),
         krPerKw: Math.max(0, Number($('#analysis-kr').value) || 0),
         peakCount: Number($('#analysis-peaks').value) || 1,
         model: $('#analysis-even').checked ? 'even' : 'front',
@@ -800,7 +808,7 @@ function analysisHtml(result, range, options, chargers) {
   const when = (peak) => (peak.count ? `${fmtDateTime(peak.start)} – ${fmtTime(peak.end)}` : 'never in this range');
   const modelLabel = options.model === 'even'
     ? 'each session’s energy spread evenly over its plugged-in time (a floor)'
-    : `each car charging at ${fmtNum(options.rateKw, 1)} kW from plug-in until its energy is delivered, then idle`;
+    : `each car charging at ${fmtNum(options.rateKw, 1)} kW (${rateSourceText()}) from plug-in until its energy is delivered, then idle`;
   const capLabel = options.limits === 'none'
     ? ', with no limit on the total'
     : options.limits === 'seasonal'
@@ -1126,12 +1134,67 @@ function eonSetupHtml(eon) {
     <p>The Meter tab reads the facility’s hourly values from E.ON’s Energidata API (navigator-api.eon.se). It needs the API’s client id and secret, stored as the repository secrets <code>CLIENTID</code> and <code>CLIENTSECRET</code>; the hourly publishing job passes them on. After setting them, run the workflow once (Actions → <em>Snapshot to GitHub Pages</em> → <em>Run workflow</em>).</p>${local}</div>`;
 }
 
+// Every charge record and the meter values, loaded once (refreshed every five
+// minutes when running locally) and shared by the tabs. They also give the
+// cars' charging power, which the model would otherwise have to assume.
+let inputsCache = null;
 async function loadMeterInputs() {
-  const [eon, cdrs] = await Promise.all([
-    api('/api/eon'),
-    api(`/api/cdrs?date_from=${encodeURIComponent(HISTORY_START.toISOString())}`).catch(() => ({ items: [] })),
-  ]);
-  return { eon, records: cdrs.items || [] };
+  if (!inputsCache || (!state.snapshotMode && Date.now() - inputsCache.at > 5 * 60_000)) {
+    const promise = Promise.all([
+      api('/api/eon'),
+      api(`/api/cdrs?date_from=${encodeURIComponent(HISTORY_START.toISOString())}`).catch(() => ({ items: [] })),
+    ]).then(([eon, cdrs]) => ({ eon, records: cdrs.items || [] }));
+    inputsCache = { at: Date.now(), promise };
+    promise.catch(() => {
+      inputsCache = null;
+    });
+  }
+  const inputs = await inputsCache.promise;
+  applyRateEstimate(inputs);
+  return inputs;
+}
+
+// Measured from the meter when there are enough clean plug-ins, otherwise
+// from short charge records; null when neither has enough data.
+function estimateRate({ eon, records }) {
+  const fromRecords = rateFromRecords(records);
+  const inst = eon?.configured ? (eon.installations || []).find((i) => i.hourly) : null;
+  const fromMeter = inst ? rateFromMeter(meterHours(inst), records, { minRateKw: fromRecords?.kw ?? 7.4 }) : null;
+  return fromMeter || fromRecords;
+}
+
+function applyRateEstimate(inputs) {
+  if (state.rate.estimate === undefined) state.rate.estimate = estimateRate(inputs);
+  if (state.rate.auto && state.rate.estimate) {
+    state.analysis.options = { ...state.analysis.options, rateKw: Math.round(state.rate.estimate.kw * 10) / 10 };
+  }
+}
+
+function rateSourceText() {
+  const e = state.rate.estimate;
+  if (!state.rate.auto) return 'set by hand';
+  if (!e) return 'the default, since there is too little data to measure it';
+  return e.source === 'meter'
+    ? `measured: the median step in the facility meter when a car plugs in on its own (${e.n} sessions; the middle half ${fmtNum(e.low, 1)}–${fmtNum(e.high, 1)} kW)`
+    : `estimated from ${e.n} short sessions that charged the whole time they were plugged in`;
+}
+
+function rateControlHtml(prefix, o) {
+  return `<label title="Power one car draws while it is actually charging. ChargeNode only reports energy per session, so this decides how long each session's energy took to deliver. Auto: measured from the meter (or the charge records); untick to try another value.">Car charges at <input type="number" id="${prefix}-rate" value="${o.rateKw}" min="1" max="22" step="0.1" ${state.rate.auto ? 'disabled' : ''}> kW</label>
+    <label title="${esc(rateSourceText())}"><input type="checkbox" id="${prefix}-rate-auto" ${state.rate.auto ? 'checked' : ''}> auto${state.rate.auto && state.rate.estimate ? ` (${state.rate.estimate.source === 'meter' ? 'from the meter' : 'from the records'})` : ''}</label>`;
+}
+
+function bindRateControl(prefix) {
+  $(`#${prefix}-rate-auto`)?.addEventListener('change', (event) => {
+    $(`#${prefix}-rate`).disabled = event.target.checked;
+  });
+}
+
+function readRateControl(prefix) {
+  state.rate.auto = $(`#${prefix}-rate-auto`).checked;
+  const typed = Number($(`#${prefix}-rate`).value);
+  if (state.rate.auto && state.rate.estimate) return Math.round(state.rate.estimate.kw * 10) / 10;
+  return typed > 0 ? typed : ANALYSIS_DEFAULTS.rateKw;
 }
 
 async function renderMeter() {
@@ -1424,15 +1487,27 @@ function drawPowerChart(container, points, { hourly }) {
   const barW = Math.max(1, Math.min(18, slot - (slot > 4 ? 1 : 0)));
   const labelEvery = Math.max(1, Math.ceil(points.length / 10));
 
-  // The limit as a step line, dotted where it is a whole-facility ceiling.
-  let limitPath = '';
-  let facilityPath = '';
+  // The limit: one continuous line per period with the same setting (so the
+  // dash pattern shows; one short piece per bar looked solid), dashed for a
+  // charger limit, dotted for a whole-facility ceiling, labelled at its end.
+  const runs = [];
   points.forEach((p, i) => {
     if (!p.limitKw) return;
-    const seg = `M${pad.l + i * slot},${y(p.limitKw)} H${pad.l + (i + 1) * slot}`;
-    if (p.limitKind === 'facility') facilityPath += seg;
-    else limitPath += seg;
+    const last = runs.at(-1);
+    if (last && last.kw === p.limitKw && last.kind === p.limitKind && last.to === i) last.to = i + 1;
+    else runs.push({ kw: p.limitKw, kind: p.limitKind, from: i, to: i + 1 });
   });
+  let limitPath = '';
+  let facilityPath = '';
+  const limitLabels = runs.map((r) => {
+    const x1 = pad.l + r.from * slot;
+    const x2 = pad.l + r.to * slot;
+    const seg = `M${x1},${y(r.kw)} H${x2}`;
+    if (r.kind === 'facility') facilityPath += seg;
+    else limitPath += seg;
+    const text = r.kind === 'facility' ? `whole facility ≤ ${fmtNum(r.kw, 1)} kW` : `chargers ≤ ${fmtNum(r.kw, 1)} kW`;
+    return x2 - x1 > 90 ? `<text class="tick limit-label" x="${x2 - 4}" y="${y(r.kw) - 5}" text-anchor="end">${esc(text)}</text>` : '';
+  }).join('');
 
   const bars = points.map((p, i) => {
     const x = pad.l + i * slot + (slot - barW) / 2;
@@ -1448,6 +1523,7 @@ function drawPowerChart(container, points, { hourly }) {
     ${bars}
     ${limitPath ? `<path class="limit-line" d="${limitPath}"></path>` : ''}
     ${facilityPath ? `<path class="limit-line facility" d="${facilityPath}"></path>` : ''}
+    ${limitLabels}
   </svg>`;
 
   attachTooltip(container, (i) => {
@@ -1494,7 +1570,7 @@ function drawMeterMonths(container, months) {
 // ------------------------------------------------------------------ economics
 // Is charging profitable, what does the system cost a year, did lowering the
 // peaks pay, and is the price right. The maths lives in economics.js.
-const COSTS_KEY = 'emgk.costs.v1';
+const COSTS_KEY = 'emgk.costs.v2'; // v2: ChargeNode's fee became known (60 kr/outlet/month)
 
 function loadCosts() {
   try {
@@ -1595,7 +1671,7 @@ async function renderEconomics() {
           ${row('Average price incl. VAT', (a) => (a.avgPrice ? `${fmtNum(a.avgPrice, 2)} kr/kWh` : '–'))}
           ${row('<strong>Revenue</strong> (excl. VAT)', (a) => `<strong>${money(a.revenue)}</strong>`)}
           ${row('− Electricity (energy, transfer, tax)', (a) => money(-a.energyCost))}
-          ${row('− ChargeNode', (a) => (cnUnknown ? '<span class="subtle">fee missing</span>' : money(-a.chargeNode)))}
+          ${row(`− ChargeNode${costs.chargeNodePerPointMonth ? ` (${fmtNum(costs.chargeNodePerPointMonth, 0)} kr/outlet/month × ${points})` : ''}`, (a) => (cnUnknown ? '<span class="subtle">fee missing</span>' : money(-a.chargeNode)))}
           ${row(`− This system (E.ON API ${fmtNum(costs.eonMeterKrMonth + costs.eonCostsKrMonth, 0)} kr/month from ${monthLabel(costs.systemSince || '2026-11')}${costs.otherKrYear ? ', other' : ''})`, (a) => money(-a.system))}
           ${row('= Before the effektavgift', (a) => `<strong>${money(a.net.none)}</strong>`, 'subtotal')}
           ${row('− Effektavgift the chargers added', (a) => effektCell(a))}
@@ -1836,7 +1912,7 @@ async function renderGuide() {
     <div class="card">
       <h3>Varför siffrorna blir som de blir</h3>
       <ul>
-        <li><strong>Laddarnas effekt är en uppskattning.</strong> ChargeNode berättar hur många kWh en bil fick, inte hur fort. Vi antar att bilen laddar med ${fmtNum(o.rateKw, 1)} kW tills den är klar och sedan står still (kan ändras på Analysis-fliken). Därför är ”laddarnas del” av en timme ungefärlig, medan totalen från E.ON är uppmätt.</li>
+        <li><strong>Laddarnas effekt är en uppskattning.</strong> ChargeNode berättar hur många kWh en bil fick, inte hur fort. ${state.rate.auto && state.rate.estimate?.source === 'meter' ? `Hur fort bilarna laddar är däremot uppmätt: när en bil kopplas in ökar hela anläggningens effekt i elmätaren, i mitten med ${fmtNum(state.rate.estimate.kw, 1)} kW (${state.rate.estimate.n} laddningar).` : `Vi räknar med att en bil laddar med ${fmtNum(o.rateKw, 1)} kW.`} Modellen låter varje bil ladda så fort tills den är klar och sedan stå still. Därför är ”laddarnas del” av en timme ungefärlig, medan totalen från E.ON är uppmätt.</li>
         <li><strong>”Allt annat”</strong> är E.ON:s uppmätta värde minus laddarnas uppskattade del: klubbhus, restaurang, värme, ventilation, bevattning och pumpar.</li>
         <li><strong>Vad laddarna kostar</strong> räknas som det klubben inte hade betalat utan dem: deras kWh gånger elpriset, plus skillnaden i effektavgift mellan månadens topp med och utan laddarna. Det jämförs med vad förarna betalade.</li>
         <li><strong>Kostnaderna är en uppskattning.</strong> Priserna på Meter-fliken (elpris, överföring, energiskatt, fast avgift) är platshållare tills någon skriver in siffrorna från fakturan. Fakturan gäller alltid.</li>

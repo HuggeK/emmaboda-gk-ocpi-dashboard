@@ -318,8 +318,8 @@ minus what they add with it, against the margin on the charging the ceiling
 holds back (an upper bound, since held-back charging is often only delayed),
 and compares 20, 25, 30 and 35 kW for the last winter.
 
-Costs are set on the tab and saved in the browser. ChargeNode does not publish
-its fee to site owners, so it starts at 0 and the tab says it is missing. The
+Costs are set on the tab and saved in the browser. ChargeNode charges the club
+60 kr per outlet (uttag) per month, i.e. 4,320 kr a year for six. The
 E.ON meter values (19 kr/month) count from November 2026, when they were
 bought; the 49 kr/month cost breakdown is 0 unless bought. GitHub costs
 nothing within the plan.

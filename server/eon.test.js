@@ -13,8 +13,8 @@ import {
   toWall,
   wallToUtc,
 } from './eon.js';
-import { expandSeries, meterHours, splitHours, monthlyMeter, dailyPeaks, DEFAULT_TARIFF } from '../public/meter.js';
-import { HOUR_MS, capAt, limitAt, limitsBetween, isWinter, hourlyProfile, billedPeak } from '../public/analysis.js';
+import { expandSeries, meterHours, splitHours, monthlyMeter, dailyPeaks, rateFromMeter, DEFAULT_TARIFF } from '../public/meter.js';
+import { HOUR_MS, capAt, limitAt, limitsBetween, isWinter, hourlyProfile, billedPeak, rateFromRecords } from '../public/analysis.js';
 
 const iso = (ms) => new Date(ms).toISOString();
 
@@ -152,6 +152,33 @@ test('limits: the dated ChargeNode settings, and the seasonal what-if', () => {
   const profile = hourlyProfile([{ id: 'x', start: iso(t), end: iso(t + HOUR_MS), energy_kwh: 40 }], { model: 'even', ...seasonal });
   assert.equal(profile.get(t).kw, 25);
   assert.equal(profile.get(t).rawKw, 40);
+});
+
+test('charging power: from short records, and from the meter step at plug-in', () => {
+  // 12 short sessions that charged the whole time at 11 kW, plus long ones that say nothing.
+  const day = 86_400_000;
+  const t0 = Date.parse('2026-06-01T08:00:00Z');
+  const short = Array.from({ length: 12 }, (_, i) => ({ id: `s${i}`, start: iso(t0 + i * day), end: iso(t0 + i * day + HOUR_MS), energy_kwh: 11 }));
+  const long = [{ id: 'l', start: iso(t0), end: iso(t0 + 10 * HOUR_MS), energy_kwh: 20 }];
+  assert.equal(rateFromRecords([...short, ...long]).kw, 11);
+  assert.equal(rateFromRecords(short.slice(0, 3)), null); // too few to say
+
+  // Meter: a flat 20 kW club; each day one car plugs in at 10:30 and charges 7.4 kW for hours.
+  const meter = new Map();
+  const sessions = [];
+  for (let d = 0; d < 60; d += 1) {
+    const base = Date.parse('2026-06-01T00:00:00Z') + d * day;
+    for (let h = 0; h < 24; h += 1) meter.set(base + h * HOUR_MS, 20);
+    if (d % 2 === 0) {
+      const start = base + 10.5 * HOUR_MS;
+      sessions.push({ id: `m${d}`, start: iso(start), end: iso(start + 5 * HOUR_MS), energy_kwh: 30 });
+      meter.set(base + 10 * HOUR_MS, 20 + 3.7); // half the plug-in hour
+      for (let h = 11; h < 15; h += 1) meter.set(base + h * HOUR_MS, 27.4);
+    }
+  }
+  const measured = rateFromMeter(meter, sessions, { minRateKw: 5 });
+  assert.equal(measured.n, 30);
+  assert.ok(Math.abs(measured.kw - 7.4) < 0.01);
 });
 
 test('billedPeak averages the highest hours on different days', () => {

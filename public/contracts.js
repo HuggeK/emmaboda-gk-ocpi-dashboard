@@ -48,14 +48,24 @@ export const GRID_2027 = {
   ],
 };
 
-// Solar, as worked out in the club's energy analysis (v1.31, July 2026).
-export const SOLAR = {
-  yieldKwhPerKwp: 815, // east–west roofs
-  options: [
-    { roof: 'Clubhouse office (kansliet)', kwp: 20, krPerYear: 25000 },
-    { roof: 'Barn (ladan)', kwp: 60, krPerYear: 68000 },
+// Solar simulated on the club's measured hourly consumption (Nov 2025 – Oct
+// 2026): five PVGIS weather years (2019–2023, east/west roofs at 25°), SE4
+// hourly spot prices for the same months, 2027 grid prices. Per size: how much
+// the summer months' peak drops (Apr–Sep average), the effektavgift and energy
+// saved a year (kr excl. VAT), and the share of the production used on site.
+export const SOLAR_SIMULATION = {
+  period: 'Nov 2025 – Oct 2026',
+  genericYield: 797, // kWh per kWp a year, east/west at 25°, PVGIS mean of the five years
+  krPerKwhOnSite: 1.25, // average value of a solar kWh used on site (spot + surcharge + 2027 grid energy fee + tax)
+  sizes: [
+    { kwp: 10, peakCutKw: 2.5, effektKr: 2371, energyKr: 9912, onSite: 1.0 },
+    { kwp: 20, peakCutKw: 4.5, effektKr: 4283, energyKr: 19824, onSite: 1.0 },
+    { kwp: 30, peakCutKw: 6.0, effektKr: 5653, energyKr: 29681, onSite: 0.996 },
+    { kwp: 40, peakCutKw: 7.2, effektKr: 6731, energyKr: 39297, onSite: 0.98 },
+    { kwp: 60, peakCutKw: 8.6, effektKr: 8218, energyKr: 56838, onSite: 0.90 },
+    { kwp: 80, peakCutKw: 9.3, effektKr: 9096, energyKr: 72146, onSite: 0.79 },
   ],
-  exportCapKw: 43.5, // export limited at the meter
+  costPerKwp: [8000, 10000, 12000], // installed, kr excl. VAT: an assumption until quotes arrive
 };
 
 // Each part, whether it can be negotiated, and how the club can lower it.

@@ -116,6 +116,7 @@ function writeSite(snapshot) {
     ["from './economics.js'", `from './economics.js?v=${buildId}'`],
     ["from './facility.js'", `from './facility.js?v=${buildId}'`],
     ["from './contracts.js'", `from './contracts.js?v=${buildId}'`],
+    ["import('./solar3d.js')", `import('./solar3d.js?v=${buildId}')`],
   ]);
   // The other modules must import the same analysis.js URL, or the browser loads it twice.
   rewrite(path.join(outDir, 'meter.js'), [["from './analysis.js'", `from './analysis.js?v=${buildId}'`]]);

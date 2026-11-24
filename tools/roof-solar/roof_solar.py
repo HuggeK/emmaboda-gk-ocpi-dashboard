@@ -30,7 +30,7 @@ gdal.UseExceptions()
 # The club's buildings (SWEREF 99 TM). The coordinate must be on the roof.
 BUILDINGS = [
     {"key": "kansli", "name": "Office building (kanslibyggnaden)", "e": 536483, "n": 6265521, "roof": "Sheet metal, unusual shape"},
-    {"key": "studio", "name": "Studio", "e": 536475, "n": 6265508, "roof": "Flat"},
+    {"key": "studio", "name": "Studio", "e": 536475, "n": 6265508, "roof": "Described as flat; the laser data shows 13° to the north: check on site"},
     {"key": "gamla", "name": "Old office (gamla kansliet)", "e": 536501, "n": 6265557, "roof": "Damaged: repair before any panels"},
     {"key": "ladan", "name": "Barn (ladan)", "e": 536482, "n": 6265589, "roof": "The energy analysis's 60 kWp option"},
     {"key": "restaurang", "name": "Restaurant", "e": 536516, "n": 6265488, "roof": "Kitchen, cold rooms and heat pump underneath: high daytime use"},
@@ -413,6 +413,11 @@ def analyse(ds, b, buildings=None, ortho=None):
         "panels": sum(f["panels"] for f in out_faces),
         "kwp": round(sum(f["kwp"] for f in out_faces), 2),
         "kwh_year": sum(f["kwh_year"] for f in out_faces),
+        # For the 3D model: SWEREF 99 TM of the grid's top-left corner, and
+        # the roof's height above the ground in decimetres (0 outside the
+        # roof, so trees and the surroundings drop out).
+        "origin": [round(crop_origin[0], 2), round(crop_origin[1], 2)],
+        "heights_dm": base64.b64encode(np.where(mc, np.clip(np.nan_to_num(zc - ground, nan=0.0), 0, 60) * 10, 0).round().astype("<i2").tobytes()).decode(),
     }
 
 
@@ -425,6 +430,7 @@ def main():
     ap.add_argument("--px", type=float, default=0.5, help="cell size when building a surface model from laser data (m)")
     ap.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "out", "roofs.json"))
     ap.add_argument("--source", help="text describing the height data, shown in the viewer")
+    ap.add_argument("--publish", help="also write a compact copy without images for the dashboard's Solar tab (e.g. public/data/solar-roofs.json)")
     args = ap.parse_args()
     if not args.dsm and not args.laz:
         ap.error("give --dsm or --laz")
@@ -455,6 +461,13 @@ def main():
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump(result, fh)
     print("wrote", args.out)
+    if args.publish:
+        # The dashboard is public: geometry and results only, no aerial photo.
+        public = {**result, "buildings": [{k: v for k, v in b.items() if k not in ("image", "photo")} for b in result["buildings"]]}
+        os.makedirs(os.path.dirname(os.path.abspath(args.publish)), exist_ok=True)
+        with open(args.publish, "w", encoding="utf-8") as fh:
+            json.dump(public, fh, separators=(",", ":"))
+        print("wrote", args.publish, os.path.getsize(args.publish) // 1024, "kB")
 
 
 if __name__ == "__main__":

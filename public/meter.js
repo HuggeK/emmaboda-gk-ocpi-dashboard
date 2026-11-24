@@ -17,7 +17,7 @@ export const DEFAULT_TARIFF = {
   retailOre: 80, // elhandel: SE4 spot averaged about 67 öre in 2025, plus the retailer's surcharge
   transferOre: 20, // E.ON Elnät överföringsavgift (placeholder)
   energyTaxOre: 36, // energiskatt 2026 (Skatteverket: 36.0 öre/kWh; 43.9 in 2025)
-  fixedKr: 600, // E.ON Elnät fast abonnemangsavgift per month
+  fixedKr: 709, // E.ON Elnät fixed fee per month, 2026 (energy analysis v1.31)
   krPerKw: DEFAULT_OPTIONS.krPerKw, // effektavgift per kW of the month's billed peak
   peakCount: 1, // the billed peak is the average of this many highest hours (on different days)
   vatPct: 25,
@@ -217,6 +217,48 @@ export function rateFromMeter(meter, records, { minRateKw = 7.4 } = {}) {
   steps.sort((a, b) => a - b);
   const q = (p) => steps[Math.floor(p * (steps.length - 1))];
   return { kw: q(0.5), low: q(0.25), high: q(0.75), n: steps.length, source: 'meter' };
+}
+
+// A typical day: per clock hour, the average and 95th percentile of the rest
+// of the club (measured − chargers) and the chargers' average, over the rows
+// that pass `keep` (e.g. one season).
+export function typicalDay(rows, keep = () => true) {
+  const hours = Array.from({ length: 24 }, () => ({ other: [], chargers: 0, n: 0 }));
+  for (const r of rows) {
+    if (!keep(r)) continue;
+    const h = hours[new Date(r.at).getHours()];
+    h.other.push(r.otherKw);
+    h.chargers += r.chargerKw;
+    h.n += 1;
+  }
+  return hours.map((h, hour) => {
+    const sorted = [...h.other].sort((a, b) => a - b);
+    return {
+      hour,
+      n: h.n,
+      otherAvg: h.n ? sorted.reduce((s, v) => s + v, 0) / h.n : 0,
+      otherP95: h.n ? sorted[Math.floor(0.95 * (h.n - 1))] : 0,
+      chargersAvg: h.n ? h.chargers / h.n : 0,
+    };
+  });
+}
+
+// The `count` highest hours of every complete month (each on a different day,
+// as billedPeak picks them), with the chargers' estimated part of each.
+export function monthlyTopHours(rows, count = 3) {
+  const months = new Map();
+  for (const r of rows) {
+    const key = monthKey(r.at);
+    (months.get(key) || months.set(key, []).get(key)).push(r);
+  }
+  const out = [];
+  for (const [month, hs] of [...months.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const [y, m] = month.split('-').map(Number);
+    const complete = hs.length >= ((new Date(y, m, 1) - new Date(y, m - 1, 1)) / HOUR_MS) - 24;
+    const top = billedPeak(hs.map((h) => ({ at: h.at, kw: h.meterKw, row: h })), count).hours;
+    top.forEach((t, rank) => out.push({ month, rank: rank + 1, complete, ...t.row }));
+  }
+  return out;
 }
 
 export function summarize(rows, months) {

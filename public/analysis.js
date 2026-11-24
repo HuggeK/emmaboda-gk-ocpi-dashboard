@@ -49,7 +49,7 @@ export const DEFAULT_OPTIONS = {
   limits: 'actual',
   capKw: 43.5,
   winterCapKw: 25,
-  krPerKw: 120,
+  krPerKw: 120.8, // E.ON E4N04L 2026: single highest hour, same all year (energy analysis v1.31)
   peakCount: 1,
   chargers: 6,
 };

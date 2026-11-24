@@ -158,6 +158,28 @@ export function chargingWindow(record, options = {}) {
   return { start: plugged.start, end, kw: kwh / ((end - plugged.start) / HOUR_MS) };
 }
 
+const median = (values) => {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted.length ? sorted[sorted.length >> 1] : null;
+};
+
+// The cars' charging power, estimated from the charge records: a short
+// session with a fair amount of energy must have charged the whole time it
+// was plugged in, so its energy / plugged-in time is the rate it charged at.
+// ChargeNode's records have one charging period and no charging time, so
+// nothing finer is available from OCPI.
+export function rateFromRecords(records) {
+  const rates = [];
+  for (const r of records) {
+    const w = pluggedWindow(r);
+    const kwh = Number(r.energy_kwh) || 0;
+    if (!w || kwh <= 3) continue;
+    const hours = (w.end - w.start) / HOUR_MS;
+    if (hours >= 0.25 && hours < 1.5) rates.push(kwh / hours);
+  }
+  return rates.length >= 10 ? { kw: median(rates), n: rates.length, source: 'records' } : null;
+}
+
 // Sweep line over intervals -> segments of constant overlap count (count > 0).
 export function concurrencySegments(windows) {
   const events = [];

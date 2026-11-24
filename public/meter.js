@@ -170,6 +170,55 @@ export function monthlyMeter(rows, { tariff = DEFAULT_TARIFF, revenue = null, ra
   });
 }
 
+// The cars' charging power, measured by the facility meter: when a car plugs
+// in on its own, the hourly average steps up by its charging power. The step
+// is taken from the hour before plug-in to the first full hour after, minus
+// the club's usual change between those clock hours (same month, days without
+// charging), so the morning rise in the clubhouse is not counted. Only
+// sessions that stayed plugged in through that hour, had energy for it at
+// minRateKw, and did not overlap another session are used.
+export function rateFromMeter(meter, records, { minRateKw = 7.4 } = {}) {
+  const busy = new Set();
+  const sessions = records.filter((r) => Number(r.energy_kwh) > 0 && r.start && r.end);
+  for (const r of sessions) {
+    for (let t = Math.floor(Date.parse(r.start) / HOUR_MS) * HOUR_MS - HOUR_MS; t <= Date.parse(r.end) + HOUR_MS; t += HOUR_MS) busy.add(t);
+  }
+  const usual = new Map();
+  for (const t of meter.keys()) {
+    if (busy.has(t) || busy.has(t - HOUR_MS) || busy.has(t + HOUR_MS)) continue;
+    const before = meter.get(t - HOUR_MS);
+    const after = meter.get(t + HOUR_MS);
+    if (before === undefined || after === undefined) continue;
+    const d = new Date(t);
+    const key = `${d.getMonth()}-${d.getHours()}`;
+    (usual.get(key) || usual.set(key, []).get(key)).push(after - before);
+  }
+  const med = (xs) => {
+    const a = [...xs].sort((x, y) => x - y);
+    return a.length ? a[a.length >> 1] : null;
+  };
+  const steps = [];
+  for (const r of sessions) {
+    const start = Date.parse(r.start);
+    const end = Date.parse(r.end);
+    const hour = Math.floor(start / HOUR_MS) * HOUR_MS;
+    const before = hour - HOUR_MS;
+    const after = hour + HOUR_MS;
+    if (end < after + HOUR_MS) continue;
+    if (r.energy_kwh < minRateKw * ((after + HOUR_MS - start) / HOUR_MS) * 0.9) continue;
+    if (sessions.some((o) => o !== r && Date.parse(o.start) < after + HOUR_MS && Date.parse(o.end) > before)) continue;
+    const mb = meter.get(before);
+    const ma = meter.get(after);
+    const u = med(usual.get(`${new Date(hour).getMonth()}-${new Date(hour).getHours()}`) || []);
+    if (mb === undefined || ma === undefined || u === null) continue;
+    steps.push(ma - mb - u);
+  }
+  if (steps.length < 30) return null;
+  steps.sort((a, b) => a - b);
+  const q = (p) => steps[Math.floor(p * (steps.length - 1))];
+  return { kw: q(0.5), low: q(0.25), high: q(0.75), n: steps.length, source: 'meter' };
+}
+
 export function summarize(rows, months) {
   const top = rows.reduce((best, r) => (!best || r.meterKw > best.meterKw ? r : best), null);
   const kwh = rows.reduce((sum, r) => sum + r.meterKw, 0);

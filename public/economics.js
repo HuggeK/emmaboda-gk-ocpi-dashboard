@@ -7,9 +7,8 @@
 import { billedPeak, monthKey, limitAt, limitsBetween, isWinter } from './analysis.js';
 
 // What running the chargers and this dashboard costs besides the electricity.
-// ChargeNode does not publish its fee to site owners: copy it from the contract.
 export const DEFAULT_COSTS = {
-  chargeNodePerPointMonth: 0, // kr per charging point per month
+  chargeNodePerPointMonth: 60, // kr per outlet (uttag) per month, ChargeNode's fee to the club
   chargeNodeSharePct: 0, // % of the charging revenue excl. VAT
   chargeNodeOrePerKwh: 0, // öre per kWh charged
   eonMeterKrMonth: 19, // E.ON Energidata, mätvärden (bought)

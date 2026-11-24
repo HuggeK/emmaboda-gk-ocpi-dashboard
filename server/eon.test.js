@@ -14,7 +14,7 @@ import {
   wallToUtc,
 } from './eon.js';
 import { expandSeries, meterHours, splitHours, monthlyMeter, dailyPeaks, DEFAULT_TARIFF } from '../public/meter.js';
-import { HOUR_MS, capAt, limitAt, limitsBetween, hourlyProfile, billedPeak } from '../public/analysis.js';
+import { HOUR_MS, capAt, limitAt, limitsBetween, isWinter, hourlyProfile, billedPeak } from '../public/analysis.js';
 
 const iso = (ms) => new Date(ms).toISOString();
 
@@ -131,6 +131,18 @@ test('limits: the dated ChargeNode settings, and the seasonal what-if', () => {
   const now = limitAt(at('2026-11-20T12:00:00Z'));
   assert.equal(now.kind, 'facility');
   assert.equal(Math.round(now.kw), 25); // 36 A
+  // After the confirmed settings, the yearly plan: 1 Mar chargers 43.5 kW, 26 Oct facility 25 kW.
+  const local = (d) => new Date(`${d}T12:00:00`).getTime();
+  assert.equal(limitAt(local('2027-02-28')).kind, 'facility');
+  assert.equal(limitAt(local('2027-03-01')).kw, 43.5);
+  assert.equal(limitAt(local('2027-03-01')).planned, true);
+  assert.equal(limitAt(local('2027-10-25')).kind, 'chargers');
+  assert.equal(limitAt(local('2027-10-26')).kind, 'facility');
+  assert.equal(limitAt(local('2031-07-01')).kw, 43.5);
+  const oct = limitsBetween(new Date(2027, 9, 1).getTime(), new Date(2027, 10, 1).getTime());
+  assert.deepEqual(oct.map((l) => [l.from, l.kind]), [['2027-03-01', 'chargers'], ['2027-10-26', 'facility']]);
+  assert.equal(isWinter(local('2027-10-26')), true);
+  assert.equal(isWinter(local('2027-03-01')), false);
   const seasonal = { limits: 'seasonal', capKw: 43.5, winterCapKw: 25 };
   assert.equal(capAt(at('2026-07-01T12:00:00Z'), seasonal), 43.5);
   assert.equal(capAt(at('2026-01-10T12:00:00Z'), seasonal), 25);

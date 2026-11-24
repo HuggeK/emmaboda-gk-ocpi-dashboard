@@ -308,11 +308,20 @@ shown per month in the tables:
 | (start) | chargers ≤ about 57 kW | approximate setting before July 2026 |
 | 17 Jul 2026 | chargers ≤ 63 A (43.5 kW) | the chargers together; the rest of the club is not counted |
 | 2 Nov 2026 | whole facility ≤ 36 A (≈ 25 kW) | dynamic: the chargers only get what the rest of the club leaves under 25 kW; no charging if ChargeNode's meter fails |
+| every year from 1 Mar | chargers ≤ 63 A (43.5 kW) | yearly plan: full charging for the golf season |
+| every year from 26 Oct | whole facility ≤ 36 A (≈ 25 kW) | yearly plan: the chargers only use the room left in winter |
 | always | main fuse 125 A ≈ 86.6 kW | the most the facility can draw |
 
-The *Limits* control also offers a what-if (a charger limit in summer and a
-facility ceiling in winter, November to March) and *None*. Add a row to
-`LIMIT_HISTORY` whenever ChargeNode changes the setting.
+**Yearly plan.** After the last confirmed setting the dashboard assumes the
+plan in `SEASON_PLAN`: the club e-mails ChargeNode to lower the limit on
+26 October and raise it again on 1 March. The workflow
+`.github/workflows/season-reminder.yml` opens an issue on 12 October and
+15 February (assigned to the owner, label `chargenode-season`) with the e-mail
+ready to send; it can also be run by hand (Actions → *Season reminder*). If
+ChargeNode switches on another date, add that date as a row to `LIMIT_HISTORY`.
+
+The *Limits* control also offers a what-if (other values on the plan's
+dates: a charger limit in season, a facility ceiling in winter) and *None*.
 
 ## Troubleshooting
 
@@ -370,4 +379,5 @@ scripts/build-snapshot.js             public/ + data/snapshot.json -> dist/
 scripts/ocpi-handshake.js             Exchanges a registration key for the real key
 .github/workflows/snapshot-pages.yml  Hourly fetch (ChargeNode + E.ON), deploy and report
 .github/scripts/report-run.cjs        Comments each run's outcome on the tracking issue
+.github/workflows/season-reminder.yml Yearly reminders to e-mail ChargeNode (26 Oct, 1 Mar)
 ```

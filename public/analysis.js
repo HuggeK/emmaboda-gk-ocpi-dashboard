@@ -27,24 +27,61 @@ export const LIMIT_HISTORY = [
   { from: '2026-11-02', kind: 'facility', amps: 36, kw: ampsToKw(36), label: 'Whole facility ≤ 36 A (≈ 25 kW)', note: 'ChargeNode e-mail of 2 Nov 2026: chargers only use the room left under 25 kW' },
 ];
 
-// limits 'actual': the dated settings above. limits 'seasonal' is a what-if:
-// summer, the chargers may take capKw; in winterMonths the whole facility is
-// held under winterCapKw. peakCount: the month's billed effekt is the average
-// of that many highest hours, each on a different day (1 = the single highest).
+// The club's yearly plan after the settings above: ChargeNode is asked on
+// 26 October to hold the whole facility under 36 A (≈ 25 kW) for the winter,
+// and on 1 March to give the chargers 63 A (43.5 kW) again for the season.
+// Dates are month-day, local time.
+export const SEASON_PLAN = {
+  winterFrom: '10-26',
+  seasonFrom: '03-01',
+  winter: { kind: 'facility', amps: 36, kw: ampsToKw(36), label: 'Whole facility ≤ 36 A (≈ 25 kW)', note: 'Yearly plan: ChargeNode lowers it on 26 Oct' },
+  season: { kind: 'chargers', amps: 63, kw: 43.5, label: 'Chargers ≤ 63 A (43.5 kW)', note: 'Yearly plan: ChargeNode raises it on 1 Mar' },
+};
+
+// limits 'actual': the dated settings, then the yearly plan. limits
+// 'seasonal' is a what-if on the plan's dates: in season the chargers may
+// take capKw, in winter the whole facility is held under winterCapKw.
+// peakCount: the month's billed effekt is the average of that many highest
+// hours, each on a different day (1 = the single highest).
 export const DEFAULT_OPTIONS = {
   model: 'front',
   rateKw: 11,
   limits: 'actual',
   capKw: 43.5,
   winterCapKw: 25,
-  winterMonths: [11, 12, 1, 2, 3],
   krPerKw: 120,
   peakCount: 1,
   chargers: 6,
 };
 
-export function isWinter(t, winterMonths = DEFAULT_OPTIONS.winterMonths) {
-  return winterMonths.includes(new Date(t).getMonth() + 1);
+const pad2 = (n) => String(n).padStart(2, '0');
+
+// Local midnight of a "YYYY-MM-DD" date.
+export const dayStart = (date) => new Date(`${date}T00:00:00`).getTime();
+
+// Is t in the winter window, 26 Oct up to (not including) 1 Mar?
+export function isWinter(t, plan = SEASON_PLAN) {
+  const d = new Date(t);
+  const md = `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  return md >= plan.winterFrom || md < plan.seasonFrom;
+}
+
+// Every dated limit: the confirmed settings, then the plan's switch dates up
+// to the end of untilYear. Entries after today are marked planned.
+const timelines = new Map();
+export function limitTimeline(untilYear = new Date().getFullYear() + 1) {
+  if (timelines.has(untilYear)) return timelines.get(untilYear);
+  const last = LIMIT_HISTORY.at(-1);
+  const out = [...LIMIT_HISTORY];
+  for (let year = Number(last.from.slice(0, 4)); year <= untilYear; year += 1) {
+    for (const key of ['season', 'winter']) {
+      const from = `${year}-${key === 'winter' ? SEASON_PLAN.winterFrom : SEASON_PLAN.seasonFrom}`;
+      if (from > last.from) out.push({ from, ...SEASON_PLAN[key], planned: true });
+    }
+  }
+  out.sort((a, b) => a.from.localeCompare(b.from));
+  timelines.set(untilYear, out);
+  return out;
 }
 
 // The limit in force at instant t: { kind, kw, amps, label } or null.
@@ -52,13 +89,16 @@ export function limitAt(t, options = {}) {
   const o = { ...DEFAULT_OPTIONS, ...options };
   if (o.limits === 'none') return null;
   if (o.limits === 'seasonal') {
-    if (isWinter(t, o.winterMonths) && o.winterCapKw > 0) {
+    if (isWinter(t) && o.winterCapKw > 0) {
       return { kind: 'facility', kw: o.winterCapKw, amps: null, label: `Whole facility ≤ ${Math.round(o.winterCapKw * 10) / 10} kW (winter)` };
     }
-    return o.capKw > 0 ? { kind: 'chargers', kw: o.capKw, amps: null, label: `Chargers ≤ ${Math.round(o.capKw * 10) / 10} kW (summer)` } : null;
+    return o.capKw > 0 ? { kind: 'chargers', kw: o.capKw, amps: null, label: `Chargers ≤ ${Math.round(o.capKw * 10) / 10} kW (season)` } : null;
   }
   let current = null;
-  for (const limit of LIMIT_HISTORY) if (Date.parse(limit.from) <= t) current = limit;
+  for (const limit of limitTimeline(new Date(t).getFullYear())) {
+    if (dayStart(limit.from) > t) break;
+    current = limit;
+  }
   return current || LIMIT_HISTORY[0];
 }
 
@@ -72,9 +112,10 @@ export function limitsBetween(from, to, options = {}) {
     const b = limitAt(to - 1, o);
     return [a, b].filter((l, i, all) => l && all.findIndex((x) => x?.label === l.label) === i);
   }
-  return LIMIT_HISTORY.filter((l, i) => {
-    const start = Date.parse(l.from);
-    const end = i + 1 < LIMIT_HISTORY.length ? Date.parse(LIMIT_HISTORY[i + 1].from) : Infinity;
+  const timeline = limitTimeline(new Date(Math.min(to, 8.64e15) - 1).getFullYear());
+  return timeline.filter((l, i) => {
+    const start = dayStart(l.from);
+    const end = i + 1 < timeline.length ? dayStart(timeline[i + 1].from) : Infinity;
     return start < to && end > from;
   });
 }
@@ -247,7 +288,7 @@ export function monthlyPeaks(profile, { krPerKw = DEFAULT_OPTIONS.krPerKw, range
         spikeRevenue: billed.hours.length ? billed.hours.reduce((sum, h) => sum + h.revenue, 0) / billed.hours.length : 0,
         peakHours: billed.hours.map((h) => ({ at: h.at, kw: h.kw })),
         capKw,
-        winter: isWinter(monthStart, capOptions.winterMonths),
+        winter: isWinter(monthStart + 15 * 86_400_000), // by the middle of the month
         cost,
         partial,
         monthRevenue,

@@ -4,6 +4,8 @@ import {
   hourlyProfile,
   revenueByMonth,
   LIMIT_HISTORY,
+  SEASON_PLAN,
+  dayStart,
   MAIN_FUSE_A,
   MAIN_FUSE_KW,
   DEFAULT_OPTIONS as ANALYSIS_DEFAULTS,
@@ -797,8 +799,8 @@ function analysisHtml(result, range, options, chargers) {
   const capLabel = options.limits === 'none'
     ? ', with no limit on the total'
     : options.limits === 'seasonal'
-      ? `, with the total capped at ${fmtNum(options.capKw, 1)} kW in summer and at most ${fmtNum(options.winterCapKw, 1)} kW (the whole facility’s ceiling) in winter`
-      : ', with the total capped at the limit ChargeNode had set at the time (see “Limits” above)';
+      ? `, with the total capped at ${fmtNum(options.capKw, 1)} kW in season (1 Mar – 25 Oct) and at most ${fmtNum(options.winterCapKw, 1)} kW (the whole facility’s ceiling) in winter`
+      : ', with the total capped at the limit ChargeNode had set at the time, and after that the yearly plan (see “Limits” above)';
 
   const tiles = [
     { label: 'Most plugged in at once', value: `${plugged.peak.count}<small>of ${chargers}</small>`, hint: when(plugged.peak) },
@@ -1023,14 +1025,14 @@ function shareLimits(options) {
 function limitControlsHtml(prefix, o) {
   const seasonal = o.limits === 'seasonal';
   return `
-    <label title="Which limit to apply to the chargers. Actual: what ChargeNode had configured at the time (see the list below). What-if: one limit for the chargers in summer and a ceiling for the whole facility in winter.">Limits
+    <label title="Which limit to apply to the chargers. Actual: what ChargeNode had configured at the time, then the yearly plan (26 Oct: whole facility ≤ 25 kW; 1 Mar: chargers ≤ 43.5 kW). What-if: other values on the same dates.">Limits
       <select id="${prefix}-limits">
-        <option value="actual" ${o.limits === 'actual' ? 'selected' : ''}>Actual (ChargeNode)</option>
-        <option value="seasonal" ${seasonal ? 'selected' : ''}>What-if: summer / winter</option>
+        <option value="actual" ${o.limits === 'actual' ? 'selected' : ''}>Actual + yearly plan</option>
+        <option value="seasonal" ${seasonal ? 'selected' : ''}>What-if: season / winter</option>
         <option value="none" ${o.limits === 'none' ? 'selected' : ''}>None</option>
       </select></label>
-    <label class="seasonal-only" ${seasonal ? '' : 'hidden'} title="What-if, summer: the chargers together may draw at most this.">Summer, chargers ≤ <input type="number" id="${prefix}-cap" value="${o.capKw}" min="0" step="0.5"> kW</label>
-    <label class="seasonal-only" ${seasonal ? '' : 'hidden'} title="What-if, winter (Nov–Mar): the whole facility may draw at most this; the chargers get what the rest of the club leaves. 36 A is about 25 kW.">Winter, whole facility ≤ <input type="number" id="${prefix}-winter" value="${o.winterCapKw}" min="0" step="0.5"> kW</label>`;
+    <label class="seasonal-only" ${seasonal ? '' : 'hidden'} title="What-if, season (1 Mar – 25 Oct): the chargers together may draw at most this.">Season, chargers ≤ <input type="number" id="${prefix}-cap" value="${o.capKw}" min="0" step="0.5"> kW</label>
+    <label class="seasonal-only" ${seasonal ? '' : 'hidden'} title="What-if, winter (26 Oct – 28 Feb): the whole facility may draw at most this; the chargers get what the rest of the club leaves. 36 A is about 25 kW.">Winter, whole facility ≤ <input type="number" id="${prefix}-winter" value="${o.winterCapKw}" min="0" step="0.5"> kW</label>`;
 }
 
 function bindLimitControls(prefix) {
@@ -1064,10 +1066,13 @@ function limitsLegendHtml(o) {
     ? ['<span class="limit-chip">No charger limit applied (what-if)</span>']
     : o.limits === 'seasonal'
       ? [
-        `<span class="limit-chip chargers">Summer: chargers ≤ ${fmtNum(o.capKw, 1)} kW</span>`,
-        `<span class="limit-chip facility">Winter (Nov–Mar): whole facility ≤ ${fmtNum(o.winterCapKw, 1)} kW, chargers get what is left</span>`,
+        `<span class="limit-chip chargers">Season (1 Mar – 25 Oct): chargers ≤ ${fmtNum(o.capKw, 1)} kW</span>`,
+        `<span class="limit-chip facility">Winter (26 Oct – 28 Feb): whole facility ≤ ${fmtNum(o.winterCapKw, 1)} kW, chargers get what is left</span>`,
       ]
-      : LIMIT_HISTORY.map((l) => `<span class="limit-chip ${l.kind}" title="${esc(l.note)}">from ${esc(limitDate(l.from))}: ${esc(l.label)}</span>`);
+      : [
+        ...LIMIT_HISTORY.map((l) => `<span class="limit-chip ${l.kind}" title="${esc(l.note)}">from ${esc(limitDate(l.from))}: ${esc(l.label)}</span>`),
+        `<span class="limit-chip plan" title="The club asks ChargeNode to switch on these dates every year.">then every year: 1 Mar ${esc(SEASON_PLAN.season.label)} · 26 Oct ${esc(SEASON_PLAN.winter.label)}</span>`,
+      ];
   return `<div class="limits-legend"><span class="subtle">Limits:</span> ${items.join(' ')} ${fuse} <span class="limit-chip tariff">Effektavgift ${fmtNum(o.krPerKw, 0)} kr/kW</span> <a href="#guide">what do these mean?</a></div>`;
 }
 
@@ -1076,7 +1081,7 @@ function limitsLegendHtml(o) {
 function limitCellHtml(limits) {
   const list = (Array.isArray(limits) ? limits : [limits]).filter(Boolean);
   if (!list.length) return '<span class="subtle">none</span>';
-  return list.map((l, i) => `<span class="limit-chip ${l.kind}">${list.length > 1 && i > 0 && l.from ? `from ${esc(limitDate(l.from))}: ` : ''}${esc(l.label)}</span>`).join(' ');
+  return list.map((l, i) => `<span class="limit-chip ${l.kind}"${l.note ? ` title="${esc(l.note)}"` : ''}>${list.length > 1 && i > 0 && l.from ? `from ${esc(limitDate(l.from))}: ` : ''}${esc(l.label)}${l.planned && dayStart(l.from) > Date.now() ? ' (planned)' : ''}</span>`).join(' ');
 }
 
 // ---------------------------------------------------------------------- meter
@@ -1556,17 +1561,26 @@ async function renderGuide() {
         <li><strong>Gräns för laddarna</strong> (t.ex. 63 A ≈ 43,5 kW): laddarna tillsammans får aldrig ta mer än så. Men de bryr sig inte om vad resten av klubben drar, så toppen kan bli <em>resten + 43,5 kW</em>.</li>
         <li><strong>Tak för hela anläggningen</strong> (sedan ${esc(limitDate(ceiling.from))}: ${ceiling.amps} A ≈ ${fmtNum(ceiling.kw, 1)} kW): ChargeNode mäter hela anläggningens ström och låter laddarna använda bara det som blir över under taket. Drar klubben redan ${fmtNum(ceiling.kw, 0)} kW får laddarna ingenting. Då kan laddarna aldrig vara orsaken till att vi passerar taket. Om ChargeNodes strömmätare slutar fungera går det inte att ladda alls (det är ett skydd, inte ett fel).</li>
       </ul>
+      <div class="notice"><h3>Planen varje år</h3>
+        <ul>
+          <li><strong>26 oktober:</strong> vi ber ChargeNode sänka till ett tak på ${SEASON_PLAN.winter.amps} A (≈ ${fmtNum(SEASON_PLAN.winter.kw, 0)} kW) för hela anläggningen. Under vintern är klubbens egen förbrukning högre (värme) och laddningen liten, så laddarna ska inte kunna skapa nya effekttoppar.</li>
+          <li><strong>1 mars:</strong> vi ber ChargeNode höja igen till ${SEASON_PLAN.season.amps} A (${fmtNum(SEASON_PLAN.season.kw, 1)} kW) för laddarna inför säsongen, när fler laddar och klubben vill erbjuda full fart.</li>
+        </ul>
+        <div class="subtle">Två veckor före varje datum öppnas automatiskt ett ärende på GitHub med ett färdigt mejl till ChargeNode. Diagrammen räknar med planen från och med nu; byter ChargeNode ett annat datum läggs det in som en ny rad.</div>
+      </div>
       ${seasonDiagramSvg(seasons, usedExample, ceiling, chargerCap)}
-      <p class="subtle">${source === 'mätt' ? 'Staplarna bygger på E.ON:s uppmätta värden: genomsnittet av månadernas debiterade topp, uppdelat på laddarna och allt annat.' : source === 'demo' ? 'Staplarna bygger på påhittade demovärden.' : ''}${usedExample.winter || usedExample.summer ? ' Där det står ”exempel” finns inga mätvärden ännu, och siffrorna är bara för att visa principen.' : ''} På vintern är resten av klubbens förbrukning högre (värme), så med ett tak för hela anläggningen blir det mindre plats över för laddarna. På sommaren går mer el till laddning.</p>
+      <p class="subtle">${source === 'mätt' ? 'Staplarna bygger på E.ON:s uppmätta värden: genomsnittet av månadernas debiterade topp, uppdelat på laddarna och allt annat.' : source === 'demo' ? 'Staplarna bygger på påhittade demovärden.' : ''}${usedExample.winter || usedExample.summer ? ' Där det står ”exempel” finns inga mätvärden ännu, och siffrorna är bara för att visa principen.' : ''} På vintern är resten av klubbens förbrukning högre (värme), så med ett tak för hela anläggningen blir det mindre plats över för laddarna. Under säsongen går mer el till laddning.</p>
       <div class="table-wrap"><table>
         <thead><tr><th>Gräns</th><th class="num">Ampere</th><th class="num">kW</th><th>Gäller</th><th>Vad den betyder</th></tr></thead>
         <tbody>
           <tr><td>Huvudsäkring</td><td class="num">${MAIN_FUSE_A} A</td><td class="num">${fmtNum(MAIN_FUSE_KW, 1)}</td><td>alltid</td><td>Det mesta anläggningen kan dra över huvud taget.</td></tr>
           ${LIMIT_HISTORY.map((l, i) => `<tr><td>${l.kind === 'facility' ? 'Tak för hela anläggningen' : 'Gräns för laddarna'}</td><td class="num">${l.amps ? `${l.amps} A` : '–'}</td><td class="num">${fmtNum(l.kw, 1)}</td><td>${i < LIMIT_HISTORY.length - 1 ? `${esc(limitDate(l.from))} – ${esc(limitDate(LIMIT_HISTORY[i + 1].from))}` : `från ${esc(limitDate(l.from))}`}</td><td>${l.kind === 'facility' ? 'Laddarna får bara det som resten av klubben lämnar under taket.' : 'Laddarna tillsammans; resten av klubben räknas inte.'} <span class="subtle">${esc(l.note)}</span></td></tr>`).join('')}
+          <tr><td><strong>Plan, säsong</strong></td><td class="num">${SEASON_PLAN.season.amps} A</td><td class="num">${fmtNum(SEASON_PLAN.season.kw, 1)}</td><td>varje år från 1 mars</td><td>Gräns för laddarna, så att de kan ladda för fullt under golfsäsongen.</td></tr>
+          <tr><td><strong>Plan, vinter</strong></td><td class="num">${SEASON_PLAN.winter.amps} A</td><td class="num">${fmtNum(SEASON_PLAN.winter.kw, 1)}</td><td>varje år från 26 oktober</td><td>Tak för hela anläggningen; laddarna får bara det som blir över.</td></tr>
           <tr><td>Effektavgift</td><td class="num">–</td><td class="num">–</td><td>varje månad</td><td>${fmtNum(kr, 0)} kr per kW av månadens högsta timme (E.ON Elnät).</td></tr>
         </tbody>
       </table></div>
-      <p>Samma gränser ritas in i diagrammen på flikarna Analysis och Meter: streck för en gräns för laddarna, prickat för taket för hela anläggningen. Under <em>Limits</em> kan man också prova ”tänk om”: en gräns för laddarna på sommaren och ett tak för hela anläggningen på vintern, och se vad det hade gjort med topparna.</p>
+      <p>Samma gränser ritas in i diagrammen på flikarna Analysis och Meter: streck för en gräns för laddarna, prickat för taket för hela anläggningen. Under <em>Limits</em> kan man också prova ”tänk om”: andra värden för säsongen och vintern på samma datum, och se vad det hade gjort med topparna.</p>
     </div>
 
     <div class="card">
@@ -1641,8 +1655,8 @@ function seasonDiagramSvg(seasons, usedExample, ceiling, chargerCap) {
   const maxKw = Math.max(MAIN_FUSE_KW, seasons.winter.peakKw, seasons.summer.peakKw);
   const { y, grid, base } = kwFrame(maxKw, W, H, pad);
   const cols = [
-    { key: 'summer', label: 'Sommar (apr–okt)', s: seasons.summer },
-    { key: 'winter', label: 'Vinter (nov–mar)', s: seasons.winter },
+    { key: 'summer', label: 'Säsong (1 mars – 25 okt)', s: seasons.summer },
+    { key: 'winter', label: 'Vinter (26 okt – 28 feb)', s: seasons.winter },
   ];
   const slot = (W - pad.l - pad.r) / cols.length;
   const barW = 90;
@@ -1654,7 +1668,7 @@ function seasonDiagramSvg(seasons, usedExample, ceiling, chargerCap) {
       <text class="tick" x="${x + barW / 2}" y="${H - 10}" text-anchor="middle">${esc(c.label)}</text>`;
   }).join('');
   const lineAt = (kw, cls, text) => `<line class="${cls}" x1="${pad.l}" x2="${W - pad.r}" y1="${y(kw)}" y2="${y(kw)}"></line><text class="tick" x="${W - pad.r + 6}" y="${y(kw) + 4}">${esc(text)}</text>`;
-  return `<div class="diagram chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Månadens topp sommar och vinter, uppdelad på laddarna och allt annat, med gränserna inritade">
+  return `<div class="diagram chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Månadens topp under säsong och vinter, uppdelad på laddarna och allt annat, med gränserna inritade">
     ${grid}<line class="axis-line" x1="${pad.l}" x2="${W - pad.r}" y1="${base}" y2="${base}"></line>
     ${lineAt(MAIN_FUSE_KW, 'limit-line fuse', `Huvudsäkring ${MAIN_FUSE_A} A ≈ ${fmtNum(MAIN_FUSE_KW, 0)} kW`)}
     ${chargerCap ? lineAt(chargerCap.kw, 'limit-line', `Laddarna ≤ 63 A ≈ ${fmtNum(chargerCap.kw, 1)} kW`) : ''}

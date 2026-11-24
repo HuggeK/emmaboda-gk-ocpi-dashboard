@@ -2,7 +2,7 @@
 // API's own format (Swedish local read-time stamps, ".01" on the repeated
 // October hour) so demo mode runs the same parsing as the real thing.
 // Consumption = a made-up club base load + the demo chargers' modelled load.
-import { hourlyProfile, limitAt } from '../public/analysis.js';
+import { hourlyProfile, limitAt, isWinter } from '../public/analysis.js';
 import { toWall, wallToUtc, parseEonTime } from './eon.js';
 
 const HOUR_MS = 3_600_000;
@@ -25,9 +25,8 @@ function mulberry32(seed) {
 // daytime, a lunch bump in the golf season.
 function baseLoadKw(t, rand) {
   const d = new Date(t);
-  const month = d.getMonth() + 1;
   const hour = d.getHours();
-  const winter = [11, 12, 1, 2, 3].includes(month);
+  const winter = isWinter(t);
   const night = winter ? 22 : 6;
   const day = winter ? 36 : 14;
   const open = hour >= 7 && hour < 21;

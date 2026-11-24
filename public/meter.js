@@ -145,7 +145,7 @@ export function monthlyMeter(rows, { tariff = DEFAULT_TARIFF, revenue = null, ra
       month,
       hours: hours.length,
       partial: (range ? monthStart < range.from : false) || monthEnd > until || hours.length < ((monthEnd - monthStart) / HOUR_MS) - 2,
-      winter: isWinter(monthStart, capOptions.winterMonths),
+      winter: isWinter(monthStart + 15 * 86_400_000), // by the middle of the month
       limit,
       limits: limitsBetween(monthStart, monthEnd, capOptions),
       capKw: limit?.kw ?? null,

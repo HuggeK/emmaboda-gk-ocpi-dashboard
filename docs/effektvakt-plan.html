@@ -1,0 +1,509 @@
+<title>Effektvakt</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --ground: #f3f5f0;
+    --surface: #ffffff;
+    --surface-2: #eceee6;
+    --ink: #171911;
+    --ink-2: #565a4a;
+    --muted: #86897a;
+    --line: #e0e3d7;
+    --line-strong: #cfd3c4;
+    --accent: #2f5fd0;
+    --accent-2: #223f8a;
+    --accent-bg: #e7edfb;
+    --accent-ink: #ffffff;
+    --good: #1a8f3c;
+    --good-bg: #e3f2e6;
+    --warn: #a9780a;
+    --warn-bg: #f5ead1;
+    --crit: #c23a2c;
+    --crit-bg: #f7e1dd;
+    --shadow: 0 1px 2px rgba(20,24,10,.05), 0 6px 20px rgba(20,24,10,.05);
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0e110b;
+      --surface: #171a12;
+      --surface-2: #20241a;
+      --ink: #eef1e5;
+      --ink-2: #b8bca8;
+      --muted: #82856f;
+      --line: #2a2e20;
+      --line-strong: #3a3f2d;
+      --accent: #7699f2;
+      --accent-2: #a9c0f8;
+      --accent-bg: #182238;
+      --accent-ink: #0e110b;
+      --good: #55c06f;
+      --good-bg: #142f1c;
+      --warn: #dfa63a;
+      --warn-bg: #2f2612;
+      --crit: #e46a5c;
+      --crit-bg: #331b17;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 26px rgba(0,0,0,.34);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0e110b;
+    --surface: #171a12;
+    --surface-2: #20241a;
+    --ink: #eef1e5;
+    --ink-2: #b8bca8;
+    --muted: #82856f;
+    --line: #2a2e20;
+    --line-strong: #3a3f2d;
+    --accent: #7699f2;
+    --accent-2: #a9c0f8;
+    --accent-bg: #182238;
+    --accent-ink: #0e110b;
+    --good: #55c06f;
+    --good-bg: #142f1c;
+    --warn: #dfa63a;
+    --warn-bg: #2f2612;
+    --crit: #e46a5c;
+    --crit-bg: #331b17;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 26px rgba(0,0,0,.34);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 0 24px 96px; }
+  .col { max-width: 760px; }
+
+  h1, h2, h3 { font-family: "Archivo", system-ui, sans-serif; line-height: 1.12; text-wrap: balance; margin: 0; }
+  h2 { font-size: clamp(1.5rem, 3.4vw, 2.05rem); font-weight: 800; letter-spacing: -.015em; }
+  h3 { font-size: 1.16rem; font-weight: 700; letter-spacing: -.01em; }
+  p { margin: 0; }
+  a { color: var(--accent); text-underline-offset: 2px; }
+  strong { font-weight: 600; }
+  em { font-style: italic; }
+  .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace; font-size: .74rem; font-weight: 500;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--muted);
+  }
+
+  header.top { padding: 56px 0 30px; border-bottom: 1px solid var(--line); }
+  .kicker { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
+  .bolt {
+    width: 30px; height: 30px; border-radius: 8px; background: var(--accent);
+    display: grid; place-items: center; color: var(--accent-ink); flex: none;
+  }
+  .bolt svg { width: 18px; height: 18px; }
+  .wordmark { font-family: "Archivo", sans-serif; font-weight: 800; letter-spacing: -.02em; font-size: 1.05rem; }
+  header.top h1 {
+    font-family: "Archivo", sans-serif; font-weight: 800;
+    font-size: clamp(2.1rem, 6vw, 3.4rem); letter-spacing: -.03em; line-height: 1.02;
+  }
+  header.top .lede { margin-top: 18px; font-size: clamp(1.05rem, 2vw, 1.24rem); color: var(--ink-2); max-width: 680px; }
+  .masthead-meta { margin-top: 30px; display: flex; flex-wrap: wrap; gap: 10px 12px; }
+  .chip {
+    font-family: "IBM Plex Mono", monospace; font-size: .78rem; font-weight: 500;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
+    padding: 5px 12px; color: var(--ink-2);
+  }
+  .chip b { color: var(--ink); font-weight: 600; }
+
+  section { padding-top: 52px; }
+  .sec-head { margin-bottom: 20px; }
+  .sec-head .eyebrow { display: block; margin-bottom: 8px; }
+  .lead-p { font-size: 1.06rem; color: var(--ink-2); }
+
+  .verdict {
+    background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--accent);
+    border-radius: var(--radius); padding: 26px 28px; box-shadow: var(--shadow);
+  }
+  .verdict .answer { font-family: "Archivo", sans-serif; font-weight: 700; font-size: 1.4rem; letter-spacing: -.02em; margin-bottom: 12px; }
+  .verdict .answer .no { color: var(--crit); }
+  .verdict .answer .yes { color: var(--good); }
+  .verdict p { color: var(--ink-2); }
+  .verdict p + p { margin-top: 12px; }
+
+  .grid { display: grid; gap: 16px; }
+  .cards-3 { grid-template-columns: repeat(3, 1fr); }
+  .cards-2 { grid-template-columns: repeat(2, 1fr); }
+  @media (max-width: 780px) { .cards-3, .cards-2 { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 20px; box-shadow: var(--shadow);
+  }
+  .card h3 { margin-bottom: 8px; }
+  .card p { color: var(--ink-2); font-size: .95rem; }
+
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; min-width: 640px; }
+  th, td { text-align: left; padding: 13px 16px; vertical-align: top; border-bottom: 1px solid var(--line); font-size: .93rem; }
+  thead th {
+    font-family: "IBM Plex Mono", monospace; font-size: .72rem; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600; background: var(--surface-2);
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.path { font-weight: 600; color: var(--ink); white-space: nowrap; }
+  td .sub { display: block; color: var(--muted); font-size: .82rem; font-weight: 400; }
+  .tag { font-family: "IBM Plex Mono", monospace; font-size: .74rem; padding: 2px 8px; border-radius: 6px; font-weight: 500; white-space: nowrap; display: inline-block; }
+  .tag.have { background: var(--good-bg); color: var(--good); }
+  .tag.ask { background: var(--warn-bg); color: var(--warn); }
+  .tag.buy { background: var(--accent-bg); color: var(--accent-2); }
+
+  .loadbar { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px 24px; box-shadow: var(--shadow); }
+  .stack { display: flex; height: 46px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line-strong); }
+  .stack .seg { display: grid; place-items: center; font-size: .82rem; font-weight: 600; color: #fff; padding: 0 8px; text-align: center; }
+  .stack .base { background: var(--accent); }
+  .stack .charge { background: var(--warn); color: #241a02; }
+  .stack .free { background: var(--surface-2); color: var(--muted); font-weight: 500; }
+  .loadbar .axis { display: flex; justify-content: space-between; margin-top: 8px; font-family: "IBM Plex Mono", monospace; font-size: .74rem; color: var(--muted); }
+  .loadbar .cap { margin-top: 14px; color: var(--ink-2); font-size: .93rem; }
+
+  .signal { border-radius: var(--radius); padding: 18px 18px 20px; border: 1px solid var(--line); background: var(--surface); box-shadow: var(--shadow); display: flex; flex-direction: column; }
+  .signal .light { display: inline-flex; align-items: center; gap: 8px; font-family: "IBM Plex Mono", monospace; font-weight: 600; font-size: .8rem; letter-spacing: .04em; text-transform: uppercase; padding: 5px 11px; border-radius: 999px; align-self: flex-start; }
+  .signal.go .light { background: var(--good-bg); color: var(--good); }
+  .signal.wait .light { background: var(--warn-bg); color: var(--warn); }
+  .signal.stop .light { background: var(--crit-bg); color: var(--crit); }
+  .signal .light .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .signal.go .dot { background: var(--good); }
+  .signal.wait .dot { background: var(--warn); }
+  .signal.stop .dot { background: var(--crit); }
+  .meter { margin: 16px 0 10px; }
+  .meter .track { position: relative; height: 30px; background: var(--surface-2); border-radius: 7px; overflow: visible; border: 1px solid var(--line); }
+  .meter .fill { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 6px 0 0 6px; }
+  .signal.go .fill { background: var(--good); }
+  .signal.wait .fill { background: var(--warn); }
+  .signal.stop .fill { background: var(--crit); }
+  .meter .thresh { position: absolute; top: -5px; bottom: -5px; width: 2px; background: var(--ink); }
+  .meter .thresh::after { content: "topp"; position: absolute; top: -15px; left: 50%; transform: translateX(-50%); font-family: "IBM Plex Mono", monospace; font-size: .62rem; color: var(--ink-2); white-space: nowrap; }
+  .signal .nums { display: flex; gap: 16px; font-family: "IBM Plex Mono", monospace; font-size: .78rem; color: var(--muted); margin: 6px 0 8px; }
+  .signal .nums b { color: var(--ink); font-weight: 600; }
+  .signal .verdict-line { font-size: .93rem; color: var(--ink-2); margin-top: auto; }
+  .signal .verdict-line b { color: var(--ink); }
+
+  .arch { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 720px) { .arch { grid-template-columns: 1fr; } }
+  .node { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow); }
+  .node .role { display: block; font-family: "IBM Plex Mono", monospace; font-size: .7rem; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 6px; }
+  .node.primary { border-left: 4px solid var(--accent); }
+  .node.primary .role { color: var(--accent); }
+  .node.secondary { border-left: 4px solid var(--warn); }
+  .node.secondary .role { color: var(--warn); }
+  .node.optional { border-left: 4px dashed var(--line-strong); }
+  .node.optional .role { color: var(--muted); }
+  .node .name { font-weight: 600; }
+  .node .desc { color: var(--ink-2); font-size: .9rem; margin-top: 4px; }
+  .arch-hub { grid-column: 1 / -1; text-align: center; background: var(--ink); color: var(--ground); border-radius: var(--radius); padding: 16px; font-weight: 600; }
+  .arch-hub .role { color: var(--muted); }
+  .arch-hub b { color: var(--ground); }
+
+  .track { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px 24px; box-shadow: var(--shadow); }
+  .track .thead { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+  .track .tnum { font-family: "Archivo", sans-serif; font-weight: 800; font-size: 1.5rem; color: var(--accent); line-height: 1; }
+  .track ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; }
+  .track li { color: var(--ink-2); font-size: .95rem; padding-left: 4px; }
+  .track li b { color: var(--ink); }
+
+  .qblock { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
+  .qblock .qhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; background: var(--surface-2); border-bottom: 1px solid var(--line); }
+  .qblock .qhead .eyebrow { margin: 0; }
+  .copybtn { font-family: "IBM Plex Mono", monospace; font-size: .76rem; font-weight: 500; cursor: pointer; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink); padding: 6px 12px; border-radius: 7px; }
+  .copybtn:hover { border-color: var(--accent); color: var(--accent); }
+  .copybtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .qlist { list-style: none; margin: 0; padding: 8px 0; counter-reset: q; }
+  .qlist li { display: grid; grid-template-columns: 30px 1fr; gap: 4px; padding: 11px 20px; border-bottom: 1px solid var(--line); }
+  .qlist li:last-child { border-bottom: none; }
+  .qlist li::before { counter-increment: q; content: counter(q); font-family: "IBM Plex Mono", monospace; color: var(--accent); font-weight: 600; font-size: .86rem; }
+  .qlist li span { color: var(--ink); font-size: .93rem; }
+
+  ul.notes { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 12px; }
+  ul.notes li { display: grid; grid-template-columns: 20px 1fr; gap: 10px; color: var(--ink-2); font-size: .95rem; }
+  ul.notes li::before { content: "!"; font-family: "IBM Plex Mono", monospace; font-weight: 600; color: var(--warn); background: var(--warn-bg); border-radius: 6px; width: 20px; height: 20px; display: grid; place-items: center; font-size: .78rem; margin-top: 2px; }
+  ul.notes li b { color: var(--ink); }
+
+  .callout { background: var(--accent-bg); border-radius: var(--radius); padding: 18px 20px; color: var(--accent-2); font-size: .97rem; }
+  .callout b { color: var(--accent-2); }
+
+  footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--line); color: var(--muted); font-size: .84rem; font-family: "IBM Plex Mono", monospace; line-height: 1.7; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <header class="top">
+    <div class="kicker">
+      <span class="bolt" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>
+      </span>
+      <span class="wordmark">Effektvakt</span>
+    </div>
+    <h1>Realtidseffekt och&nbsp;effekttoppar</h1>
+    <p class="lede">Kan vi läsa laddarnas momentaneffekt via OCPP eller nyare OCPI &ndash; och hur bygger vi en vakt som säger om det är okej att dra igång något stort just nu, utan att slå i månadens effekttopp?</p>
+    <div class="masthead-meta">
+      <span class="chip">Emmaboda GK &middot; <b>Vissefjärda</b></span>
+      <span class="chip">Nätägare: <b>E.ON Elnät</b></span>
+      <span class="chip">CPO: <b>ChargeNode</b> (OCPI 2.2.1)</span>
+      <span class="chip">Underlag: <b>2026-09-09</b></span>
+    </div>
+  </header>
+
+  <section id="svar">
+    <div class="col">
+      <div class="verdict">
+        <p class="answer"><span class="no">Nej</span> &ndash; momentaneffekt går inte att få, <span class="yes">men rätt data finns ändå.</span></p>
+        <p>Laddarnas sekundsnabba effekt (via OCPP) landar hos ChargeNode, inte hos oss. Vi har bara OCPI, och OCPI ger som finast ett <strong>medelvärde per laddperiod</strong> i kW &ndash; ingen ström i realtid, ingen prenumeration, och bara om ChargeNode väljer att skicka det. Att uppgradera OCPI-versionen ändrar inget: effektvärdet är definierat likadant i alla versioner.</p>
+        <p>Det spelar mindre roll än det låter, för <strong>effekttariffen debiteras på hela anläggningens uttag</strong> vid mätaren &ndash; inte på laddarna. Den siffra vi faktiskt behöver kommer från elmätarens <strong>HAN-port</strong> och uppdateras var tionde sekund. Laddardata via OCPI blir ett komplement som visar hur stor del av toppen som är laddning.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="vagar">
+    <div class="col sec-head">
+      <span class="eyebrow">Tre vägar, tre tak</span>
+      <h2>Var effektsiffran kan komma ifrån</h2>
+      <p class="lead-p">Frågan var om OCPP eller en nyare OCPI ger bättre upplösning. Det korta svaret: begränsningen är inte protokollversionen, utan vem som mäter och hur ofta.</p>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Källa</th><th>Vad den mäter</th><th>Upplösning &amp; fördröjning</th><th>Vem styr</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="path">OCPI Sessions<span class="sub">det vi har idag</span></td>
+            <td>Effekt per laddare, bara under aktiv session</td>
+            <td><b>Medelvärde per period</b>, kW. Minuter i bästa fall, ibland först vid sessionsslut. Ingen spänning/ström.</td>
+            <td>ChargeNode bestämmer takten</td>
+            <td><span class="tag have">Har</span></td>
+          </tr>
+          <tr>
+            <td class="path">OCPP MeterValues<span class="sub">laddare &rarr; molnet</span></td>
+            <td>Effekt/ström/spänning per laddare, per fas</td>
+            <td><b>30&ndash;60 s</b> är realistiskt. Tekniskt bra &ndash; men strömmen slutar hos ChargeNode.</td>
+            <td>Endast ChargeNode har åtkomst</td>
+            <td><span class="tag ask">Fråga</span></td>
+          </tr>
+          <tr>
+            <td class="path">HAN-porten<span class="sub">elmätaren</span></td>
+            <td><b>Hela anläggningens</b> uttag &ndash; det tariffen debiterar</td>
+            <td><b>Var 10:e sekund</b>, momentan aktiv effekt (W), per fas. Gratis, aktiveras på begäran.</td>
+            <td>Vi &ndash; helt i egen regi</td>
+            <td><span class="tag buy">Bygg</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="col" style="margin-top:16px">
+      <p style="color:var(--ink-2); font-size:.95rem">OCPP kan alltså mäta snabbt, men vi når det inte utan ChargeNode. HAN-porten är både den snabbaste källan och den enda som mäter <em>rätt sak</em> för effekttariffen.</p>
+    </div>
+  </section>
+
+  <section id="varfor">
+    <div class="col sec-head">
+      <span class="eyebrow">Kärninsikten</span>
+      <h2>Laddardata räcker inte &ndash; toppen sitter på hela abonnemanget</h2>
+      <p class="lead-p">Effekttariffen mäter uttaget vid anslutningspunkten. Laddarna är en last bland flera: klubbhus, restaurang/kök, ventilation, pumpar, belysning. Perfekt laddartelemetri mäter ändå bara en bit av kakan.</p>
+    </div>
+    <div class="col">
+      <div class="loadbar">
+        <div class="stack" role="img" aria-label="Hela anläggningens effekt: baslast cirka 40 kilowatt, laddning cirka 22 kilowatt, ledigt utrymme upp till månadstoppen cirka 16 kilowatt">
+          <div class="seg base" style="width:52%">Baslast&nbsp;~40&nbsp;kW</div>
+          <div class="seg charge" style="width:28%">Laddning&nbsp;~22&nbsp;kW</div>
+          <div class="seg free" style="width:20%">Ledigt&nbsp;~16&nbsp;kW</div>
+        </div>
+        <div class="axis"><span>0 kW</span><span>Månadstopp ~78 kW</span></div>
+        <p class="cap"><b>HAN-porten</b> ger den blå + gula summan (allt vi drar). <b>OCPI</b> ger den gula biten (laddarna). Dra bort den ena från den andra så ser vi baslasten &ndash; och därmed hur mycket av toppen som faktiskt är laddning vi kan skjuta upp. <span class="mono" style="color:var(--muted)">Siffrorna är exempel.</span></p>
+      </div>
+    </div>
+  </section>
+
+  <section id="timmedel">
+    <div class="col sec-head">
+      <span class="eyebrow">Så mäts timmedeleffekten</span>
+      <h2>Vakten räknar på timmen, inte på ögonblicket</h2>
+      <p class="lead-p">E.ON debiterar <strong>timmedeleffekten</strong> &ndash; energin under en hel klocktimme uttryckt som medeleffekt (kW). En kort spik spelar ingen roll om lasten sjunker innan timmen är slut. Månadskostnaden sätts av de <strong>högsta timmarna</strong> (typiskt snittet av de 3 högsta, på olika dygn, under höglasttid). Därför projicerar vakten timmens medel mot månadstoppen och ger en trafikljussignal.</p>
+    </div>
+    <div class="grid cards-3">
+      <div class="signal go">
+        <span class="light"><span class="dot"></span>Kör</span>
+        <div class="meter"><div class="track"><div class="fill" style="width:60%"></div><div class="thresh" style="left:80%"></div></div></div>
+        <div class="nums"><span>Projicerad timmedel <b>58 kW</b></span></div>
+        <p class="verdict-line">Marginal <b>~20 kW</b> kvar under toppen. <b>Slå på upp till en 22 kW-laddare</b> resten av timmen utan att sätta ny topp.</p>
+      </div>
+      <div class="signal wait">
+        <span class="light"><span class="dot"></span>Vänta lite</span>
+        <div class="meter"><div class="track"><div class="fill" style="width:74%"></div><div class="thresh" style="left:80%"></div></div></div>
+        <div class="nums"><span>Projicerad timmedel <b>72 kW</b></span></div>
+        <p class="verdict-line">Bara <b>~6 kW</b> marginal. Okej <b>enbart om timmen snart är slut</b> &ndash; annars hinner medlet krypa över.</p>
+      </div>
+      <div class="signal stop">
+        <span class="light"><span class="dot"></span>Avvakta</span>
+        <div class="meter"><div class="track"><div class="fill" style="width:92%"></div><div class="thresh" style="left:80%"></div></div></div>
+        <div class="nums"><span>Projicerad timmedel <b>84 kW</b></span></div>
+        <p class="verdict-line">Redan <b>över</b> månadstoppen. Att dra på mer <b>sätter en ny, dyrare topp</b> för hela månaden.</p>
+      </div>
+    </div>
+    <div class="col" style="margin-top:16px">
+      <div class="callout">Utanför höglasttid (natt, helg, sommarhalvåret) räknas inga nya toppar. Då vänder vakten till <b>&bdquo;Fritt fram&ldquo;</b> &ndash; passa på att köra det som drar mycket. Exakt tidsfönster och antal räknade timmar bekräftas mot E.ON:s prislista.</div>
+    </div>
+  </section>
+
+  <section id="arkitektur">
+    <div class="col sec-head">
+      <span class="eyebrow">Datakällor att koppla ihop</span>
+      <h2>HAN som grund, OCPI som komplement</h2>
+      <p class="lead-p">Allt körs på samma alltid-igång Node-server som redan proxar OCPI. Lägg till en läsare för HAN-strömmen och en <span class="mono">/api/facility</span>-rutt som gränssnittet pollar.</p>
+    </div>
+    <div class="arch">
+      <div class="node primary">
+        <span class="role">Grund &middot; hela anläggningen</span>
+        <span class="name">Elmätarens HAN/P1-port</span>
+        <span class="desc">Momentan aktiv effekt var 10:e sekund. Läses lokalt av t.ex. Tibber Pulse eller en ESPHome/amshan-läsare. Detta ÄR siffran E.ON debiterar.</span>
+      </div>
+      <div class="node secondary">
+        <span class="role">Komplement &middot; laddarna</span>
+        <span class="name">OCPI-pollern (finns redan)</span>
+        <span class="desc">Laddningens andel av lasten, per laddare och session. Behåll märkningen mätt / härledd / uppskattad. Kontext, inte styrsignal.</span>
+      </div>
+      <div class="arch-hub">
+        <span class="role mono" style="display:block; font-size:.68rem; letter-spacing:.1em; margin-bottom:4px">Node-servern &middot; slår ihop &amp; räknar timmedel</span>
+        Baslast = <b>HAN totalt &minus; laddning</b> &nbsp;&rarr;&nbsp; projicerad timmedel, månadstopp, marginal, kör/vänta-signal
+      </div>
+      <div class="node optional">
+        <span class="role">Tillval &middot; robusthet</span>
+        <span class="name">CT-mätare (Shelly Pro 3EM)</span>
+        <span class="desc">Klämmätare på inkommande matning eller på laddargruppen om HAN-porten saknas eller OCPI-effekten är för grov. Mäter på 1 s.</span>
+      </div>
+      <div class="node optional">
+        <span class="role">Tillval &middot; styrning senare</span>
+        <span class="name">ChargeNode lastbalansering</span>
+        <span class="desc">Ett effekttak eller SetChargingProfile som faktiskt kapar laddeffekt. Måste begäras av ChargeNode. Vakten börjar som rådgivande, inte styrande.</span>
+      </div>
+    </div>
+  </section>
+
+  <section id="behovs">
+    <div class="col sec-head">
+      <span class="eyebrow">Vad som behövs</span>
+      <h2>Inköp och aktivering</h2>
+    </div>
+    <div class="grid cards-3">
+      <div class="card">
+        <h3>Aktivera HAN-porten</h3>
+        <p>Gratis, klart inom en arbetsdag efter begäran till E.ON. Ta reda på mätarens modell och uttag (RJ12/P1 eller RJ45/HAN-NVE) &ndash; det avgör om per-fas-effekt finns.</p>
+      </div>
+      <div class="card">
+        <h3>En HAN-läsare</h3>
+        <p>Tibber Pulse P1, Homey Energy Dongle eller en ESP32 med amshan/ESPHome byggd för svensk HDLC. Publicerar över lokal MQTT/HTTP till Node-servern.</p>
+      </div>
+      <div class="card">
+        <h3>CT-mätare (tillval)</h3>
+        <p>Shelly Pro 3EM dimensionerad efter huvudsäkringen &ndash; be elektrikern om säkringsstorleken. Reserv om HAN saknas, eller för säkrast laddarandel.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="spar">
+    <div class="col sec-head">
+      <span class="eyebrow">Två spår att starta nu</span>
+      <h2>Bygg det ena, fråga det andra &ndash; parallellt</h2>
+      <p class="lead-p">HAN-arbetet är inte beroende av ChargeNodes svar. Kör båda samtidigt.</p>
+    </div>
+    <div class="grid cards-2">
+      <div class="track">
+        <div class="thead"><span class="tnum">A</span><h3>Mät hela anläggningen</h3></div>
+        <ol>
+          <li><b>Bekräfta tariffen.</b> Läs av anläggnings-ID och tariff på E.ON-fakturan eller nätomraden.se: kr/kW, antal räknade timmar (2/3/5), höglasttidens timmar och säsong, och om medlet är klocktimme.</li>
+          <li><b>Begär HAN-porten</b> aktiverad hos E.ON och notera mätarmodell och uttagstyp.</li>
+          <li><b>Skaffa en läsare</b> och res upp lokal MQTT/HTTP-inmatning på Node-servern; lägg till <span class="mono">/api/facility</span>.</li>
+          <li><b>Bygg ut dashboarden:</b> energiackumulering per klocktimme, projicerad timmedel, månadstopp (och N:e högsta), höglastfönster och kör/vänta-signalen.</li>
+          <li><b>Stäm av</b> den beräknade månadstoppen mot E.ON:s timvärden (dygnsfördröjda) en gång i månaden.</li>
+        </ol>
+      </div>
+      <div class="track">
+        <div class="thead"><span class="tnum">B</span><h3>Fråga ChargeNode</h3></div>
+        <ol>
+          <li><b>Skicka frågelistan</b> nedan &ndash; om POWER-takt i OCPI, en eventuell realtidsfeed, och ett effekttak för laddarna.</li>
+          <li><b>Fråga om lastbalansering:</b> deras DLM &bdquo;läser fastighetens elmätare&ldquo; &ndash; vilken mätare, och kan den avläsningen delas med oss?</li>
+          <li><b>Be om styrning</b> mot vår timmedeltopp, inte bara mot huvudsäkringen.</li>
+          <li><b>Blockera inte</b> spår A i väntan på svar &ndash; det mesta de erbjuder är operatörssidigt och kanske inte självbetjäning för en OCPI-partner.</li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <section id="fragor">
+    <div class="col sec-head">
+      <span class="eyebrow">Klart att klistra in</span>
+      <h2>Frågor till ChargeNode</h2>
+    </div>
+    <div class="qblock">
+      <div class="qhead">
+        <span class="eyebrow">8 frågor &middot; svenska</span>
+        <button class="copybtn" id="copyq" type="button">Kopiera alla</button>
+      </div>
+      <ol class="qlist" id="qlist">
+        <li><span>Vilken OCPI-version och exakt vilka moduler exponerar ni för vår CPO-access (Locations, Sessions, CDRs, Tariffs &ndash; och specifikt Smart Charging / ChargingProfiles)?</span></li>
+        <li><span>Populerar ni POWER-dimensionen (och CURRENT, STATE_OF_CHARGE) i Sessions charging_periods, och med vilken push-frekvens &ndash; per minut, var 15:e minut, eller endast vid sessionens slut?</span></li>
+        <li><span>Vilket MeterValueSampleInterval / TxUpdatedInterval och vilka measurands är konfigurerade på våra laddare, och kan ni höja samplingsfrekvensen (t.ex. var 30&ndash;60:e sekund) och spegla den nära realtid i OCPI-sessionerna?</span></li>
+        <li><span>Erbjuder ni någon realtidsfeed utanför OCPI &ndash; MQTT, webhook eller REST-API &ndash; som exponerar aktuell effekt per laddare eller för hela anläggningen?</span></li>
+        <li><span>Er dynamiska lastbalansering &bdquo;läser kontinuerligt av fastighetens elmätare&ldquo; &ndash; vilken mätare/vilket gränssnitt läser ni (CT-klämmor, Modbus, P1/HAN eller DSO-mätaren), var sitter den, och kan den totala fastighetsavläsningen göras tillgänglig för oss?</span></li>
+        <li><span>Kan ni sätta ett fast effekttak (kW/A) för våra laddare, och kan det taket styras mot vår månads-effekttopp (timmedeleffekt) och inte bara mot huvudsäkringen?</span></li>
+        <li><span>Kan vår OCPI-credential skicka en SetChargingProfile (max effekt/ström) för att begränsa en laddare, eller är all styrning enbart molnsidan hos er?</span></li>
+        <li><span>Förstår er peak shaving-logik svensk timmedeleffekt (timmedelvärde per klocktimme), eller hanterar den enbart generella momentana effekttoppar?</span></li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="forbehall">
+    <div class="col sec-head">
+      <span class="eyebrow">Att bekräfta</span>
+      <h2>Förbehåll värda att känna till</h2>
+    </div>
+    <div class="col">
+      <ul class="notes">
+        <li><b>Exakt tariff är inte bekräftad.</b> Nätägaren är E.ON Elnät, men kr/kW, antal räknade timmar och höglastfönstret måste läsas av på er nätfaktura eller E.ON:s prislista innan någon specifik modell litas på.</li>
+        <li><b>Timmedel, inte ögonblick.</b> Debiteringen sker på timmens medelvärde. Vakten måste projicera timmens medel &ndash; annars ger den fel kör/vänta-besked.</li>
+        <li><b>Att uppgradera OCPI hjälper inte.</b> POWER är ett periodmedel i alla versioner, OCPI har ingen strömning, och 3.0 är inte publikt släppt. Behandla inte en versionshöjning som en lösning.</li>
+        <li><b>ChargeNodes förmågor är odokumenterade.</b> POWER-takt, en live-feed, ChargingProfiles och ett effekttak för vår credential måste bekräftas direkt med dem &ndash; deras lastbalansering är marknadsförd men operatörssidig.</li>
+        <li><b>HAN beror på mätaren.</b> Äldre HAN-NVE/RJ45-mätare kan sakna per-fas-effekt och tidsförskjuta timdata. Matcha läsaren mot den installerade mätaren; läsaren kan behöva egen strömförsörjning.</li>
+        <li><b>Solceller/batteri.</b> Om sådant finns eller tillkommer är HAN-totalen nettouttaget &ndash; fortfarande rätt debiterad storhet, men &bdquo;baslast = totalt &minus; laddning&ldquo; blir netto efter egen produktion, vilket bör framgå i gränssnittet.</li>
+        <li><b>15-minutersvärden på sikt.</b> Sverige rör sig mot 15-minutersmätning; en framtida modell kan flytta basen från 60-minuters timmedel till kvartseffekt. Alla dagens tariffer debiterar fortfarande timmedlet.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    Effektvakt &middot; underlag för Emmaboda GK &middot; sammanställt 2026-09-09<br>
+    Källor: openchargealliance.org &middot; github.com/ocpi/ocpi &middot; Energimarknadsinspektionen &middot; E.ON &middot; chargenode.eu
+  </footer>
+
+</div>
+
+<script>
+  (function () {
+    var btn = document.getElementById('copyq');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var items = Array.prototype.map.call(document.querySelectorAll('#qlist li span'), function (el, i) {
+        return (i + 1) + '. ' + el.textContent.trim();
+      });
+      var text = items.join('\n\n');
+      var done = function () { var o = btn.textContent; btn.textContent = 'Kopierat ✓'; setTimeout(function () { btn.textContent = o; }, 1800); };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () { done(); });
+      } else {
+        var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        document.body.removeChild(ta); done();
+      }
+    });
+  })();
+</script>

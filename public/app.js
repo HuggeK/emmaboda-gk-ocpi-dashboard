@@ -2629,7 +2629,7 @@ async function renderSolar() {
         <li><strong>It lowers the energy bill.</strong> About 85 % of the value is electricity the club does not have to buy: a solar kWh used on site saves the contract price, the grid energy fee and the energy tax, about ${fmtNum(SOLAR_SIMULATION.krPerKwhOnSite, 2)} kr/kWh excl. VAT. The club uses the most power in the daytime in season, when the sun shines.</li>
         <li><strong>It barely lowers the peak.</strong> The effektavgift is set by the month’s single highest hour, and that hour moves to the evening, an irrigation night or a cloudy day once the panels cover the middle of the day: even 80 kWp lowers the summer peak by only about 9 kW. The peak needs the ceilings (Economics tab).</li>
         <li><strong>It goes well with the chargers.</strong> Golfers charge while they play, in the middle of the day: under a whole-facility ceiling, solar gives the chargers more room.</li>
-        <li><strong>Check before buying:</strong> the studio roof (the laser data says it slopes 13° to the north, not flat), the office’s distribution point capacity with the electrician, quotes from 2–3 installers. The barn’s asbestos roof and the old office’s split roof come first (the card above).</li>
+        <li><strong>Check before buying:</strong> the studio roof’s exact pitch (it slopes, about 13° to the north by the laser data) and its load capacity, the office’s distribution point capacity with the electrician, quotes from 2–3 installers. The barn’s asbestos roof and the old office’s split roof come first (the card above).</li>
       </ul>
     </div>
     ${installerHtml(s.data, buildings)}

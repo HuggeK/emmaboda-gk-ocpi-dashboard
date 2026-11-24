@@ -2238,6 +2238,12 @@ function drawPriceLadder(container, acc, price) {
 // (tools/roof-solar → data/solar-roofs.json), a 3D model of the panels that
 // fit, and the value worked out on the club's own consumption.
 const SUGGESTED_ROOFS = ['kansli', 'studio']; // at the kanslipunkt, with capacity back to the meter
+// The days whose sun path the 3D model draws (colours as in solar3d.js's SUN_DAYS).
+const SUN_DAY_CHOICES = [
+  { key: 'summer', label: '21 Jun', month: 6, day: 21, color: '#f5b700' },
+  { key: 'equinox', label: '20 Mar / 23 Sep', month: 3, day: 20, color: '#d97706' },
+  { key: 'winter', label: '21 Dec', month: 12, day: 21, color: '#92400e' },
+];
 
 // Value a year of a system of kwp producing kwh: the energy it replaces on
 // site (exported above the simulated on-site share earns spot only, roughly
@@ -2339,7 +2345,7 @@ function roofWorkHtml(buildings, valueOf) {
       <div class="card-head"><h3>Roof work first: the barn and the old office</h3><span class="subtle">work the club has to pay for sooner or later · panels at ${fmtNum(cost / 1000, 0)}k kr/kWp · kr excl. VAT</span></div>
       <div class="notice"><h3>For the board</h3><ul>
         ${barn ? `<li><strong>The barn’s roof is eternit with asbestos</strong> and must be replaced whatever the club decides about solar; panels cannot be fixed to it without working on the asbestos, which needs a certified asbestos contractor. With panels on the new roof (${fmtNum(barn.b.kwp, 0)} kWp), the roof starts earning: about <strong>${fmtMoney(barn.v.total, 'SEK')} a year</strong> off the electricity bill.</li>` : ''}
-        ${old ? `<li><strong>The old office’s roof is split</strong>: the ridge beam and the roof must be fixed. Once it is, and once the new aluminium feeder cable from the office building is in (the golf carts that charge at the old office need it anyway${cable ? `: about ${fmtNum(cable.route[0], 0)}–${fmtNum(cable.route[1], 0)} m, roughly ${range(cable.kr)}` : ''}), solar there is a cheap next step. Its steep south roof does the most per kWp: ${fmtNum(old.b.kwp, 1)} kWp would save about <strong>${fmtMoney(old.v.total, 'SEK')} a year</strong>, pay back the panels in ${fmtNum(old.payback, 1)} years, and then carry about <strong>${fmtMoney(old.carries, 'SEK')}</strong> of the repair over ${life} years.</li>` : ''}
+        ${old ? `<li><strong>The old office’s roof is split</strong>: the ridge beam and the roof must be fixed. Once it is, and once the new aluminium feeder cable from the office building is in (the golf carts that charge at the old office need it anyway${cable ? `: about ${fmtNum(cable.route[0], 0)}–${fmtNum(cable.route[1], 0)} m, roughly ${range(cable.kr)}` : ''}), solar there is a cheap next step, right where the carts charge. The steep south roof does the most per kWp, and the carts’ lean-to on the north side takes a row more: ${fmtNum(old.b.kwp, 1)} kWp would save about <strong>${fmtMoney(old.v.total, 'SEK')} a year</strong>, pay back the panels in ${fmtNum(old.payback, 1)} years, and then carry about <strong>${fmtMoney(old.carries, 'SEK')}</strong> of the repair over ${life} years.</li>` : ''}
         <li>The repairs are costs the club takes sooner or later anyway. Done together with solar, they become <strong>investments that lower the bill</strong>: the money spent on the roofs comes back through cheaper electricity, and one job saves a second scaffold or lift.</li>
       </ul></div>
       <div class="table-wrap"><table>
@@ -2356,13 +2362,13 @@ function roofWorkHtml(buildings, valueOf) {
           <td class="num">${fmtMoney(r.carries, 'SEK')}${r.roof ? ` <span class="subtle">(${r.carries >= r.roof[1] ? 'all of the roof work' : `${Math.round(Math.max(0, Math.min(1, r.carries / r.roof[1])) * 100)}–${Math.round(Math.max(0, Math.min(1, r.carries / r.roof[0])) * 100)} % of it`})</span>` : ''}</td>
         </tr>`).join('')}</tbody>
       </table></div>
-      <p class="subtle">“Roof work the savings repay”: ${life} years of savings (the usual panel warranty), with the panels losing ${fmtNum(SOLAR_SIMULATION.degradationPct, 1)} % of their output a year, minus what the panels cost; today’s electricity prices, no interest. Barn roof prices from Swedish 2026 price guides, not quotes: asbestos removal and disposal ${ROOF_WORK.buildings.ladan.removalKrM2.join('–')} kr/m², a new metal roof with battens and underlay ${ROOF_WORK.buildings.ladan.newRoofKrM2.join('–')} kr/m² (${ROOF_WORK.sources.map((x) => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>`).join(', ')}). ROT relief is for private persons, so not for the club. ${cable ? `Feeder cable: ${fmtNum(straight, 0)} m between the buildings × ${c.routeFactor.join('–')} for the route; aluminium cable 4×25–4×50 mm² ${c.cableKrM.join('–')} kr/m, duct ${c.ductKrM.join('–')} kr/m, trench dug and reinstated ${c.trenchKrM.join('–')} kr/m, and ${fmtMoney(c.fixedKr[0], 'SEK')}–${fmtMoney(c.fixedKr[1], 'SEK')} for terminations and a sub-panel (${c.sources.map((x) => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>`).join(', ')}; the trench and the fixed part are assumptions). Ask the electrician to size it for the panels as well: a size up costs little next to the trench. ` : ''}${barn ? `The barn’s panels would export about ${Math.round((1 - barn.v.sim?.onSite) * 100) || 20} % of their output at the spot price, so they pay best together with more daytime use or a battery.` : ''}</p>
+      <p class="subtle">“Roof work the savings repay”: ${life} years of savings (the usual panel warranty), with the panels losing ${fmtNum(SOLAR_SIMULATION.degradationPct, 1)} % of their output a year, minus what the panels cost; today’s electricity prices, no interest. Barn roof prices from Swedish 2026 price guides, not quotes: asbestos removal and disposal ${ROOF_WORK.buildings.ladan.removalKrM2.join('–')} kr/m², a new metal roof with battens and underlay ${ROOF_WORK.buildings.ladan.newRoofKrM2.join('–')} kr/m² (${ROOF_WORK.sources.map((x) => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>`).join(', ')}). ROT relief is for private persons, so not for the club. ${cable ? `Feeder cable: ${fmtNum(straight, 0)} m between the buildings × ${c.routeFactor.join('–')} for the route; aluminium cable 4×25–4×50 mm² ${c.cableKrM.join('–')} kr/m, duct ${c.ductKrM.join('–')} kr/m, the trench is already dug, and ${fmtMoney(c.fixedKr[0], 'SEK')}–${fmtMoney(c.fixedKr[1], 'SEK')} for terminations and a sub-panel (${c.sources.map((x) => `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.label)}</a>`).join(', ')}; the fixed part is an assumption). Ask the electrician to size it for the panels as well: a size up costs little, and the trench is open now. ` : ''}${barn ? `The barn’s panels would export about ${Math.round((1 - barn.v.sim?.onSite) * 100) || 20} % of their output at the spot price, so they pay best together with more daytime use or a battery.` : ''}</p>
     </div>`;
 }
 
 async function renderSolar() {
   const root = $('#view-solar');
-  state.solar ||= { show: 'suggested', data: null, view: null };
+  state.solar ||= { show: 'suggested', data: null, view: null, sunDay: 'summer', sunHour: 13 };
   const s = state.solar;
   if (!s.data) {
     root.innerHTML = '<div class="loading">Loading the roof model...</div>';
@@ -2427,6 +2433,13 @@ async function renderSolar() {
         <span><i class="swatch" style="background:#0d2a52"></i>Panel</span>
         <span class="subtle">Drag to turn, scroll or pinch to zoom.</span>
       </div>
+      <div class="filters solar-sun" id="solar-sun">
+        <span class="subtle">Sun path:</span>
+        ${SUN_DAY_CHOICES.map((d) => `<button class="chip ${s.sunDay === d.key ? 'active' : ''}" data-sun-day="${d.key}"><i class="swatch" style="background:${d.color}"></i>${esc(d.label)}</button>`).join('')}
+        <label class="sun-time">Time <input type="range" id="solar-sun-time" min="3" max="23" step="0.25" value="${s.sunHour}"> <span id="solar-sun-clock" class="mono"></span></label>
+        <button id="solar-sun-play" title="Run through the day">▶ Day</button>
+        <span id="solar-sun-readout" class="subtle"></span>
+      </div>
     </div>
     <div class="card">
       <div class="card-head"><h3>Per building</h3><span class="subtle">${fmtNum(s.data.panel.wp, 0)} Wp panels, ${fmtNum(s.data.panel.w, 2)} × ${fmtNum(s.data.panel.h, 2)} m, ${fmtNum(s.data.panel.setback_m, 1)} m from the roof edges</span></div>
@@ -2434,7 +2447,7 @@ async function renderSolar() {
         <thead><tr><th>Building</th><th>Roof faces with panels</th><th class="num">Panels</th><th class="num">kWp</th><th class="num">kWh/yr</th><th class="num">kWh per kWp</th><th>Note</th></tr></thead>
         <tbody>${buildings.map((b) => `<tr>
           <td>${SUGGESTED_ROOFS.includes(b.key) ? '<strong>' : ''}${esc(b.name)}${SUGGESTED_ROOFS.includes(b.key) ? '</strong>' : ''}</td>
-          <td>${b.faces.filter((f) => f.panels).map((f) => `${esc(kind(f))} ${fmtNum(f.roof_tilt, 0)}° (${f.panels})`).join(', ') || '–'}</td>
+          <td>${b.faces.filter((f) => f.panels).map((f) => `${esc(kind(f))}${f.described ? ` <span title="${esc(f.described)}">lean-to*</span>` : ""} ${fmtNum(f.roof_tilt, 0)}° (${f.panels})`).join(', ') || '–'}</td>
           <td class="num">${b.panels}</td><td class="num">${fmtNum(b.kwp, 1)}</td><td class="num">${fmtNum(b.kwh_year, 0)}</td>
           <td class="num">${b.kwp ? fmtNum(b.kwh_year / b.kwp, 0) : '–'}</td>
           <td class="subtle">${esc(b.roof)}</td>
@@ -2455,6 +2468,7 @@ async function renderSolar() {
         }).join('')}</tbody>
       </table></div>
       <p class="subtle">Up to about 40 kWp nearly everything is used by the club itself; above that a growing share is exported and earns only the spot price, so the payback gets longer. From 2027 production above 43.5 kW also pays a grid energy fee.</p>
+      <p class="subtle"><strong>What the price per kWp covers:</strong> a turnkey system excl. VAT: panels, inverter, mounting rails, cabling and installation. Not in it: a new inverter after about 12–15 years (after the payback, but it trims the savings later on), roof work, the feeder cable to the old office, service and insurance. The prices are assumptions until quotes from 2–3 installers arrive; ask them to price the same items.</p>
     </div>
     <div class="card">
       <h3>What solar does, and what it does not</h3>
@@ -2478,9 +2492,56 @@ async function renderSolar() {
     const { mountSolar3d } = await import('./solar3d.js');
     s.view?.dispose();
     s.view = mountSolar3d($('#solar-3d'), s.data, new Set(s.show === 'all' ? buildings.map((b) => b.key) : SUGGESTED_ROOFS));
+    bindSunControls(s);
   } catch (err) {
     $('#solar-3d').innerHTML = `<div class="notice warn">The 3D model could not load (${esc(err.message)}). It needs an internet connection for three.js; the tables above have the same numbers.</div>`;
   }
+}
+
+// The sun controls under the 3D model: a day, a time (Swedish time) and a run
+// through the day; the sun, its light and the shadows follow.
+function bindSunControls(s) {
+  const slider = $('#solar-sun-time');
+  const clock = $('#solar-sun-clock');
+  const readout = $('#solar-sun-readout');
+  const play = $('#solar-sun-play');
+  if (!slider || !s.view?.setSun) return;
+  const compass = (az) => ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(az / 45) % 8];
+  const paint = () => {
+    const day = SUN_DAY_CHOICES.find((d) => d.key === s.sunDay) || SUN_DAY_CHOICES[0];
+    const p = s.view.setSun(day.month, day.day, s.sunHour);
+    const h = Math.floor(s.sunHour);
+    clock.textContent = `${String(h).padStart(2, '0')}:${String(Math.round((s.sunHour - h) * 60)).padStart(2, '0')}`;
+    readout.textContent = p.el > 0 ? `sun ${Math.round(p.el)}° up, from the ${compass(p.az)} (${Math.round(p.az)}°)` : 'the sun is below the horizon';
+  };
+  slider.addEventListener('input', () => {
+    s.sunHour = Number(slider.value);
+    paint();
+  });
+  $('#solar-sun').addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-sun-day]');
+    if (!chip) return;
+    s.sunDay = chip.dataset.sunDay;
+    for (const c of $$('#solar-sun [data-sun-day]')) c.classList.toggle('active', c === chip);
+    paint();
+  });
+  let timer = null;
+  play.addEventListener('click', () => {
+    if (timer) {
+      clearInterval(timer);
+      timer = null;
+      play.textContent = '▶ Day';
+      return;
+    }
+    play.textContent = '❚❚ Stop';
+    timer = setInterval(() => {
+      if (!slider.isConnected) return clearInterval(timer);
+      s.sunHour = s.sunHour >= 23 ? 3 : s.sunHour + 0.25;
+      slider.value = String(s.sunHour);
+      paint();
+    }, 120);
+  });
+  paint();
 }
 
 // ---------------------------------------------------------------------- guide

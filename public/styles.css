@@ -352,6 +352,10 @@ tbody tr:hover { background: var(--surface-2); }
 .solar-3d { position: relative; height: 480px; border-radius: 8px; overflow: hidden; background: var(--surface-2); touch-action: none; }
 .solar-3d canvas { display: block; width: 100%; height: 100%; }
 @media (max-width: 640px) { .solar-3d { height: 340px; } }
+.solar-sun { align-items: center; margin-top: 8px; }
+.solar-sun .chip .swatch { margin-right: 6px; }
+.solar-sun .sun-time { display: inline-flex; align-items: center; gap: 6px; }
+.solar-sun .sun-time input[type="range"] { width: min(260px, 50vw); }
 
 /* Economics */
 .chart .market-band { fill: var(--accent-soft); opacity: 0.6; }

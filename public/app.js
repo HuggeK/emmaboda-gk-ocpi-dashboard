@@ -2460,9 +2460,22 @@ function installerHtml(data, buildings) {
           <li><strong>Old office:</strong> a new aluminium cable from the office building is about to be laid (the trench is dug); it can be sized for panels on the old office.</li>
           <li><strong>Consumption:</strong> ${fmtNum(bill.kwh, 0)} kWh over ${esc(bill.period)}, most of it in the daytime in the golf season, so nearly all of an office + studio system would be used on site. The measured consumption per quarter hour can be downloaded below.</li>
         </ul>
+        <h3 style="margin-top:14px">The inverter we would like: Fronius Verto 25.0</h3>
+        <p>One Fronius Verto 25.0 at the office building for both buildings, or an equivalent that meets every point below. Why:</p>
+        <ul>
+          <li><strong>No cloud, nothing that calls home.</strong> It must be commissioned and run entirely on the local network, without a manufacturer account or portal (Fronius Solar.web stays off), on a network without internet access.</li>
+          <li><strong>Wired Ethernet</strong>, not only Wi-Fi.</li>
+          <li><strong>Open local data and control:</strong> Modbus TCP with SunSpec and the local JSON interface (Solar API), so the club’s own dashboard can read it and limit its output.</li>
+          <li><strong>Solar only, no hybrid.</strong> No lithium battery is planned. A battery (perhaps sodium-ion) may come later on the AC side, possibly with island operation through a system such as Victron, which works together with Fronius.</li>
+          <li><strong>Four MPP trackers</strong>, so one inverter takes both buildings: west 42°, east 38° + 41° in one string, south 16° and the studio’s north 13°.</li>
+          <li><strong>Quiet:</strong> about 55–57 dB(A) at 1 m. The office building is next to the 9th hole, so please propose a place indoors or on the side facing away from it, in shade.</li>
+          <li><strong>The full power from the hardware</strong>, without licence upgrades.</li>
+        </ul>
         <h3 style="margin-top:14px">Please price</h3>
         <ul>
           <li>A turnkey system on the office building and the studio (about 30 kWp), as a price per kWp excl. VAT: panels, inverter, mounting, cabling, installation and grid notification, with scaffolding or lift stated separately.</li>
+          <li>The studio’s strings to the office building, about 15 m in cable conduit in the ground with DC isolators at both buildings, and the string design: the 7 south panels as a short string (optimizers if their voltage is too low) and the studio as two strings of equal length.</li>
+          <li>A Fronius Smart Meter with current transformers at the office building’s distribution point, for measuring and, if needed, capping export.</li>
           <li>As options: the old office (about 12 kWp, once its roof is repaired) and the barn (about 90 kWp on a new roof after asbestos removal).</li>
           <li>The inverter’s warranty and expected life, and what a replacement would cost.</li>
         </ul>

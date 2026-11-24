@@ -62,7 +62,7 @@ function draw(canvas, b) {
     for (const f of b.faces) {
       const m = unpack(f.mask, b.width, b.height);
       ctx.fillStyle = css(color(f));
-      ctx.globalAlpha = 0.45;
+      ctx.globalAlpha = b.photo ? 0.3 : 0.45;
       for (let y = 0; y < b.height; y++) for (let x = 0; x < b.width; x++) if (m[y * b.width + x]) ctx.fillRect(x * scale, y * scale, scale, scale);
       ctx.globalAlpha = 1;
       ctx.fillStyle = css('var(--panel)');
@@ -83,7 +83,7 @@ function draw(canvas, b) {
     ctx.fillText('5 m', 8, canvas.height - 18);
     ctx.fillText('N ↑', canvas.width - 30, 18);
   };
-  img.src = b.image;
+  img.src = b.photo || b.image; // the aerial photo when there is one, else the height shading
 }
 
 function payback(kwp, kwh) {

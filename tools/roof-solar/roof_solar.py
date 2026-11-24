@@ -176,16 +176,37 @@ def grow_roof(z, px, seed_rc, min_above=1.5, max_step=None):
     return mask, ground
 
 
-def faces_of(z, px, mask):
+def main_axis(mask):
+    """The building's main direction (compass degrees, 0–180) from its outline."""
+    rr, cc = np.nonzero(mask)
+    if len(rr) < 3:
+        return 0.0
+    cov = np.cov(np.vstack([cc - cc.mean(), -(rr - rr.mean())]))  # x east, y north
+    vals, vecs = np.linalg.eigh(cov)
+    ex, ny = vecs[:, np.argmax(vals)]
+    return float(np.degrees(np.arctan2(ex, ny)) % 180)
+
+
+def faces_of(z, px, mask, axis=None):
+    """Roof faces: cells grouped by the direction they face. With a known
+    building axis, directions are sorted into the building's four sides (most
+    roofs are gables or hips along the walls); otherwise into 8 compass
+    sectors. Tilt and direction are measured inside each face, away from the
+    edges where walls and sparse points distort them."""
     zs = ndimage.gaussian_filter(np.nan_to_num(z, nan=0.0), 1.0)
     dzdy, dzdx = np.gradient(zs, px)  # rows go south
     slope = np.degrees(np.arctan(np.hypot(dzdx, dzdy)))
     # Compass direction the face points to (downhill): 0 = N, 90 = E, 180 = S.
     aspect = (np.degrees(np.arctan2(-dzdx, dzdy)) + 360) % 360
     flat = slope < FLAT_LIMIT
-    sector = np.where(flat, -1, np.round(aspect / 45).astype(int) % 8)
+    if axis is not None:
+        sector = np.where(flat, -1, np.round(((aspect - axis) % 360) / 90).astype(int) % 4)
+        sectors = range(-1, 4)
+    else:
+        sector = np.where(flat, -1, np.round(aspect / 45).astype(int) % 8)
+        sectors = range(-1, 8)
     faces = []
-    for s in range(-1, 8):
+    for s in sectors:
         part = mask & (sector == s)
         part = ndimage.binary_opening(part, iterations=1)
         labels, count = ndimage.label(part)
@@ -193,9 +214,12 @@ def faces_of(z, px, mask):
             m = labels == i
             if m.sum() * px * px < 4.0:  # ignore patches under 4 m²
                 continue
-            tilt = float(np.median(slope[m]))
-            az = float(np.degrees(np.arctan2(np.mean(np.sin(np.radians(aspect[m]))), np.mean(np.cos(np.radians(aspect[m]))))) % 360)
-            faces.append({"mask": m, "flat": s == -1, "tilt": FLAT_TILT if s == -1 else tilt, "roof_tilt": tilt, "azimuth": 90.0 if s == -1 else az})
+            core = ndimage.binary_erosion(m, iterations=max(1, int(round(0.75 / px))))
+            sample = core if core.sum() >= 8 else m
+            tilt = float(np.median(slope[sample]))
+            az = float(np.degrees(np.arctan2(np.mean(np.sin(np.radians(aspect[sample]))), np.mean(np.cos(np.radians(aspect[sample]))))) % 360)
+            is_flat = s == -1 or tilt < FLAT_LIMIT
+            faces.append({"mask": m, "flat": is_flat, "tilt": FLAT_TILT if is_flat else tilt, "roof_tilt": tilt, "azimuth": 90.0 if is_flat else az})
     return faces
 
 
@@ -224,29 +248,48 @@ def layout(face, px):
     ys, xs = rows * px, cols * px
     u = ys * across[0] + xs * across[1]
     v = ys * up[0] + xs * up[1]
-    panels = []
-    taken = []
-    v0 = v.min()
-    vv = v0
-    while vv + h <= v.max() + 1e-6:
-        uu = u.min()
-        while uu + w <= u.max() + 1e-6:
-            corners = [(uu, vv), (uu + w, vv), (uu, vv + h), (uu + w, vv + h), (uu + w / 2, vv + h / 2)]
-            ok = True
-            pts = []
-            for cu, cv in corners:
-                y = cu * across[0] + cv * up[0]
-                x = cu * across[1] + cv * up[1]
-                r, c = int(round(y / px)), int(round(x / px))
-                if not (0 <= r < usable.shape[0] and 0 <= c < usable.shape[1] and usable[r, c]):
-                    ok = False
-                    break
-                pts.append((x / px, y / px))
-            if ok:
-                panels.append([pts[0], pts[1], pts[3], pts[2]])
-            uu += w + gap_w
-        vv += h + gap_h
-    return usable, panels
+
+    # Cell centres lie half a cell inside the roof's real edges; extend the range
+    # to the edges (the test points below keep every panel on usable cells).
+    umin, umax = u.min() - px / 2, u.max() + px / 2
+    vmin, vmax = v.min() - px / 2, v.max() + px / 2
+
+    def fill(du, dv):
+        panels = []
+        vv = vmin + dv
+        while vv + h <= vmax + 1e-6:
+            uu = umin + du
+            while uu + w <= umax + 1e-6:
+                # Test points 10 cm inside the corners: a corner exactly on a cell
+                # border would otherwise round to the wrong side.
+                e = 0.1
+                corners = [(uu + e, vv + e), (uu + w - e, vv + e), (uu + e, vv + h - e), (uu + w - e, vv + h - e), (uu + w / 2, vv + h / 2)]
+                pts = []
+                for cu, cv in corners:
+                    y = cu * across[0] + cv * up[0]
+                    x = cu * across[1] + cv * up[1]
+                    r, c = int(round(y / px)), int(round(x / px))
+                    if not (0 <= r < usable.shape[0] and 0 <= c < usable.shape[1] and usable[r, c]):
+                        break
+                    pts.append((x / px, y / px))
+                if len(pts) == len(corners):
+                    true = []
+                    for cu, cv in ((uu, vv), (uu + w, vv), (uu + w, vv + h), (uu, vv + h)):
+                        true.append(((cu * across[1] + cv * up[1]) / px, (cu * across[0] + cv * up[0]) / px))
+                    panels.append(true)
+                uu += w + gap_w
+            vv += h + gap_h
+        return panels
+
+    # The grid's starting point decides how many whole panels fit; try a few.
+    steps = 4
+    best = []
+    for i in range(steps):
+        for j in range(steps):
+            panels = fill(i * (w + gap_w) / steps, j * (h + gap_h) / steps)
+            if len(panels) > len(best):
+                best = panels
+    return usable, best
 
 
 _pvgis_cache = {}
@@ -319,7 +362,7 @@ def analyse(ds, b, buildings=None, ortho=None):
     r0, r1, c0, c1 = max(0, rr.min() - pad), min(z.shape[0], rr.max() + pad + 1), max(0, cc.min() - pad), min(z.shape[1], cc.max() + pad + 1)
     zc, mc = z[r0:r1, c0:c1], mask[r0:r1, c0:c1]
     crop_origin = (origin[0] + c0 * px, origin[1] - r0 * px)
-    faces = faces_of(zc, px, mc)
+    faces = faces_of(zc, px, mc, main_axis(outline[r0:r1, c0:c1]) if outline is not None else None)
     if outline is not None and faces:
         # The outline is exact while sparse laser points blur the edges: give
         # every cell inside the outline to its nearest roof face.

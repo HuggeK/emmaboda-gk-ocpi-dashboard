@@ -28,10 +28,19 @@ from scipy import ndimage
 gdal.UseExceptions()
 
 # The club's buildings (SWEREF 99 TM). The coordinate must be on the roof.
+# "obstacles": things on the roof too small for the laser data (a chimney is
+# under 1 m² at about 1.2 points/m²), placed from the aerial photo: no panel
+# comes within r_m of the point.
 BUILDINGS = [
-    {"key": "kansli", "name": "Office building (kanslibyggnaden)", "e": 536483, "n": 6265521, "roof": "Sheet metal, unusual shape"},
+    {"key": "kansli", "name": "Office building (kanslibyggnaden)", "e": 536483, "n": 6265521, "roof": "Sheet metal, unusual shape; a chimney on the west roof",
+     "obstacles": [{"e": 536482.0, "n": 6265524.3, "r_m": 0.7, "what": "chimney on the west roof (from the aerial photo, about ±1 m)"}]},
     {"key": "studio", "name": "Studio", "e": 536475, "n": 6265508, "roof": "Described as flat; the laser data shows 13° to the north: check on site"},
-    {"key": "gamla", "name": "Old office (gamla kansliet)", "e": 536501, "n": 6265557, "roof": "Damaged: the roof must be repaired before any panels"},
+    # The old office has a lower-pitched lean-to (the golf carts' extension)
+    # along its north side, against the steeper main roof. The laser data is
+    # too sparse to separate the two, so the lean-to is described: its depth
+    # from the aerial photo, its pitch assumed until measured on site.
+    {"key": "gamla", "name": "Old office (gamla kansliet)", "e": 536501, "n": 6265557, "roof": "Split roof: the ridge beam and the roof must be fixed before any panels; the golf carts' lean-to along the north side",
+     "lean_tos": [{"side": "N", "depth_m": 2.5, "tilt": 15, "what": "the golf carts' lean-to (depth from the aerial photo, 15° pitch assumed)"}]},
     {"key": "ladan", "name": "Barn (ladan)", "e": 536482, "n": 6265589, "roof": "Eternit with asbestos: the roof must be replaced (asbestos removal, new roof) before any panels"},
     {"key": "restaurang", "name": "Restaurant", "e": 536516, "n": 6265488, "roof": "Kitchen, cold rooms and heat pump underneath: high daytime use"},
 ]
@@ -259,8 +268,51 @@ def obstacles(z, px, mask, tol=BUMP_TOL):
 
 def layout(face, px):
     """Panel rectangles (corner cells) inside the face, 0.5 m from its edges
-    and clear of anything standing out of the roof plane."""
-    usable = ndimage.binary_erosion(face["mask"], iterations=max(1, int(round(SETBACK / px))))
+    and clear of anything standing out of the roof plane. Sloping faces try
+    portrait and landscape panels and keep whichever fits more (a narrow
+    lean-to only takes them landscape)."""
+    if face.get("described"):
+        return _row_along(face, px)
+    best_usable, best = None, []
+    for landscape in ((False, True) if not face["flat"] else (False,)):
+        usable, panels = _layout(face, px, landscape)
+        if best_usable is None or len(panels) > len(best):
+            best_usable, best = usable, panels
+    return best_usable, best
+
+
+def _row_along(face, px):
+    """A described lean-to (a plain strip along the building): one row of
+    landscape panels along its whole length, centred across its depth, the
+    face's margin from each end. The 0.5 m grid is too coarse to test a
+    narrow diagonal strip cell by cell, so only each panel's centre and the
+    middle of its ends must lie on the strip."""
+    m = face["mask"]
+    margin = face.get("setback_m", SETBACK)
+    az = math.radians(face["azimuth"])
+    down = (-math.cos(az), math.sin(az))
+    up = (-down[0], -down[1])
+    across = (-down[1], down[0])
+    rows, cols = np.nonzero(m)
+    ys, xs = rows * px, cols * px
+    u = ys * across[0] + xs * across[1]
+    v = ys * up[0] + xs * up[1]
+    w, h = PANEL_H, PANEL_W * math.cos(math.radians(face["tilt"]))
+    vv = (v.min() + v.max()) / 2 - h / 2
+    on = lambda cu, cv: (lambda r, c: 0 <= r < m.shape[0] and 0 <= c < m.shape[1] and m[r, c])(
+        int(round((cu * across[0] + cv * up[0]) / px)), int(round((cu * across[1] + cv * up[1]) / px)))
+    panels = []
+    uu = u.min() - px / 2 + margin
+    while uu + w <= u.max() + px / 2 - margin + 1e-6:
+        if all(on(cu, vv + h / 2) for cu in (uu + 0.1, uu + w / 2, uu + w - 0.1)):
+            panels.append([((cu * across[1] + cv * up[1]) / px, (cu * across[0] + cv * up[0]) / px)
+                           for cu, cv in ((uu, vv), (uu + w, vv), (uu + w, vv + h), (uu, vv + h))])
+        uu += w + 0.02
+    return m, panels
+
+
+def _layout(face, px, landscape=False):
+    usable = ndimage.binary_erosion(face["mask"], iterations=max(1, int(round(face.get("setback_m", SETBACK) / px))))
     if face.get("obstacles") is not None:
         usable &= ~face["obstacles"]
     if not usable.any():
@@ -279,7 +331,8 @@ def layout(face, px):
         down = (-math.cos(az), math.sin(az))
         up = (-down[0], -down[1])
         across = (-down[1], down[0])
-        w, h = PANEL_W, PANEL_H * math.cos(math.radians(face["tilt"]))
+        along, upslope = (PANEL_H, PANEL_W) if landscape else (PANEL_W, PANEL_H)
+        w, h = along, upslope * math.cos(math.radians(face["tilt"]))
         gap_w, gap_h = 0.02, 0.02
     # Project the usable cells onto the (across, up) axes, in metres.
     ys, xs = rows * px, cols * px
@@ -415,9 +468,49 @@ def analyse(ds, b, buildings=None, ortho=None):
         nearest = labels[ir, ic]
         for i, f in enumerate(faces):
             f["mask"] = inside & (nearest == i + 1)
+    # Lean-tos described by hand (see BUILDINGS): the outer depth_m of the roof
+    # face on that side becomes a face of its own, with the described pitch.
+    for lt in b.get("lean_tos", []):
+        if outline is None:
+            break
+        inside_c = outline[r0:r1, c0:c1]
+        # Distance in from the outline edge on that side, column by column (N/S)
+        # or row by row (E/W).
+        idx = np.indices(inside_c.shape)
+        if lt["side"] in ("N", "S"):
+            rows_in = np.where(inside_c, idx[0], np.nan)
+            edge = np.nanmin(rows_in, axis=0) if lt["side"] == "N" else np.nanmax(rows_in, axis=0)
+            depth = np.abs(idx[0] - edge[None, :]) * px
+        else:
+            cols_in = np.where(inside_c, idx[1], np.nan)
+            edge = np.nanmax(cols_in, axis=1) if lt["side"] == "E" else np.nanmin(cols_in, axis=1)
+            depth = np.abs(idx[1] - edge[:, None]) * px
+        depth = np.nan_to_num(depth, nan=1e9)
+        for f in list(faces):
+            if f["flat"] or compass(f["azimuth"]) != lt["side"]:
+                continue
+            strip = f["mask"] & (depth < lt["depth_m"])
+            if strip.sum() * px * px < 4:
+                continue
+            f["mask"] = f["mask"] & ~strip
+            # The lean-to faces square to the building's long axis, so its
+            # panel rows run along it; 0.3 m margin: the edge against the main
+            # roof is no roof edge, and 0.3 m is a usual clearance at an eave.
+            axis = main_axis(inside_c)
+            normals = [(axis + 90) % 360, (axis + 270) % 360]
+            az = min(normals, key=lambda a: abs(((a - f["azimuth"] + 180) % 360) - 180))
+            faces.append({"mask": strip, "flat": False, "tilt": float(lt["tilt"]), "roof_tilt": float(lt["tilt"]), "azimuth": az, "described": lt["what"], "setback_m": 0.3})
+            break
+
+    # Obstacles placed by hand (see BUILDINGS): a disc of r_m around each point.
+    manual = np.zeros(mc.shape, bool)
+    yy, xx = np.mgrid[0:mc.shape[0], 0:mc.shape[1]]
+    for ob in b.get("obstacles", []):
+        r, c = (crop_origin[1] - ob["n"]) / px - 0.5, (ob["e"] - crop_origin[0]) / px - 0.5
+        manual |= np.hypot(yy - r, xx - c) * px <= ob["r_m"] + px / 2
     out_faces = []
     for i, f in enumerate(faces):
-        f["obstacles"] = obstacles(zc, px, f["mask"])
+        f["obstacles"] = obstacles(zc, px, f["mask"]) | (manual & f["mask"])
         usable, panels = layout(f, px)
         y = yield_per_kwp(f["tilt"], f["azimuth"], f["flat"]) if panels else 0
         worth = y >= MIN_YIELD
@@ -436,6 +529,7 @@ def analyse(ds, b, buildings=None, ortho=None):
             "area_m2": round(float(f["mask"].sum() * px * px / (1 if f["flat"] else math.cos(math.radians(f["roof_tilt"])))), 1),
             "usable_m2": round(float(usable.sum() * px * px / (1 if f["flat"] else math.cos(math.radians(f["roof_tilt"])))), 1),
             "obstacle_m2": round(float(f["obstacles"].sum() * px * px), 1),
+            **({"described": f["described"]} if f.get("described") else {}),
             "panels": n,
             "kwp": round(kwp, 2),
             "kwh_per_kwp": round(y),

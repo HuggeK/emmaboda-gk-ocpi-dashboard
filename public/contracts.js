@@ -71,7 +71,11 @@ export const SOLAR_SIMULATION = {
     { kwp: 60, peakCutKw: 8.6, effektKr: 8218, energyKr: 57626, onSite: 0.89 },
     { kwp: 80, peakCutKw: 9.3, effektKr: 9096, energyKr: 73019, onSite: 0.786 },
   ],
-  costPerKwp: [8000, 10000, 12000], // installed, kr excl. VAT: an assumption until quotes arrive
+  // Turnkey price per installed kWp, kr excl. VAT: panels, inverter, mounting
+  // rails, cabling and installation. An assumption until quotes arrive. Not
+  // in it: a new inverter after about 12–15 years, roof work, the feeder
+  // cable to the old office, service and insurance.
+  costPerKwp: [8000, 10000, 12000],
   lifeYears: 25, // years counted for "what the savings carry": the usual panel warranty (panels often last 30)
   degradationPct: 0.5, // output lost per year, typical for crystalline panels
 };
@@ -107,18 +111,18 @@ export const ROOF_WORK = {
 // panels too, it lets them feed back the same way. Rough estimate until an
 // electrician quotes: the route is the measured distance between the
 // buildings × routeFactor (around paths and obstacles, up into the panels);
-// aluminium ground cable 4×25–4×50 mm² (N1XE-AR / AXQJ), a cable duct, a
-// trench dug and reinstated at 0.35–0.55 m depth, and the electrician's
-// terminations and a sub-panel in the old office. Prices: forum quotes for
-// 5×50 Al cable (83 kr/m) and 50 mm duct (23 kr/m), widened for 2026; the
-// trench and fixed parts are assumptions. kr excl. VAT.
+// aluminium ground cable 4×25–4×50 mm² (N1XE-AR / AXQJ), a cable duct, and
+// the electrician's terminations and a sub-panel in the old office. The
+// trench between the buildings is already dug, so it costs nothing here.
+// Prices: forum quotes for 5×50 Al cable (83 kr/m) and 50 mm duct (23 kr/m),
+// widened for 2026; the fixed part is an assumption. kr excl. VAT.
 export const FEEDER_CABLE = {
   from: 'kansli',
   to: 'gamla',
   routeFactor: [1.25, 1.5],
   cableKrM: [80, 120],
   ductKrM: [25, 50],
-  trenchKrM: [200, 500],
+  trenchKrM: [0, 0], // the trench between the buildings is already dug (Nov 2026)
   fixedKr: [15000, 30000],
   sources: [
     { label: 'byggahus.se: offert på elkabel', url: 'https://www.byggahus.se/forum/threads/offert-pa-elkabel.515660/' },

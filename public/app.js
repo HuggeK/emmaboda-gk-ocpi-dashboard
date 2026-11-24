@@ -14,7 +14,7 @@ import {
   MAIN_FUSE_KW,
   DEFAULT_OPTIONS as ANALYSIS_DEFAULTS,
 } from './analysis.js';
-import { DEFAULT_TARIFF, hourPrices, hourlySpot, meterHours, splitHours, dailyPeaks, monthlyMeter, summarize, seasonalPicture, rateFromMeter, monthlyTopHours, typicalDay } from './meter.js';
+import { DEFAULT_TARIFF, expandSeries, hourPrices, hourlySpot, meterHours, splitHours, dailyPeaks, monthlyMeter, summarize, seasonalPicture, rateFromMeter, monthlyTopHours, typicalDay } from './meter.js';
 import { FACILITY_LOADS, BASE_LOAD_KW, explainPeak, inHours, loadLabel } from './facility.js';
 import { DEFAULT_COSTS, MARKET_BAND, account, limitSavings, priceAdvice, winterCeilingCheck, nightOffCheck } from './economics.js';
 import { BILL, BILL_PARTS, BILL_SOURCE, FEEDER_CABLE, GRID_2027, ROOF_WORK, SOLAR_SIMULATION, billTotal } from './contracts.js';
@@ -2366,6 +2366,146 @@ function roofWorkHtml(buildings, valueOf) {
     </div>`;
 }
 
+// ---- for installers: positions, roof faces, electrical facts, downloads ----
+// SWEREF 99 TM (Lantmäteriet's national grid) -> WGS 84 latitude/longitude,
+// Gauss–Krüger inverse with Lantmäteriet's published parameters (GRS 80,
+// central meridian 15°, scale 0.9996, false easting 500 000 m).
+function sweref99tmToWgs84(n, e) {
+  const a = 6378137.0;
+  const f = 1 / 298.257222101;
+  const e2 = f * (2 - f);
+  const nn = f / (2 - f);
+  const aRoof = (a / (1 + nn)) * (1 + nn ** 2 / 4 + nn ** 4 / 64);
+  const d1 = nn / 2 - (2 * nn ** 2) / 3 + (37 * nn ** 3) / 96 - nn ** 4 / 360;
+  const d2 = nn ** 2 / 48 + nn ** 3 / 15 - (437 * nn ** 4) / 1440;
+  const d3 = (17 * nn ** 3) / 480 - (37 * nn ** 4) / 840;
+  const d4 = (4397 * nn ** 4) / 161280;
+  const aStar = e2 + e2 ** 2 + e2 ** 3 + e2 ** 4;
+  const bStar = -(7 * e2 ** 2 + 17 * e2 ** 3 + 30 * e2 ** 4) / 6;
+  const cStar = (224 * e2 ** 3 + 889 * e2 ** 4) / 120;
+  const dStar = -(4279 * e2 ** 4) / 1260;
+  const xi = n / (0.9996 * aRoof);
+  const eta = (e - 500000) / (0.9996 * aRoof);
+  const xiP = xi - d1 * Math.sin(2 * xi) * Math.cosh(2 * eta) - d2 * Math.sin(4 * xi) * Math.cosh(4 * eta) - d3 * Math.sin(6 * xi) * Math.cosh(6 * eta) - d4 * Math.sin(8 * xi) * Math.cosh(8 * eta);
+  const etaP = eta - d1 * Math.cos(2 * xi) * Math.sinh(2 * eta) - d2 * Math.cos(4 * xi) * Math.sinh(4 * eta) - d3 * Math.cos(6 * xi) * Math.sinh(6 * eta) - d4 * Math.cos(8 * xi) * Math.sinh(8 * eta);
+  const phiStar = Math.asin(Math.sin(xiP) / Math.cosh(etaP));
+  const dLambda = Math.atan(Math.sinh(etaP) / Math.cos(xiP));
+  const s = Math.sin(phiStar);
+  const lat = phiStar + s * Math.cos(phiStar) * (aStar + bStar * s ** 2 + cStar * s ** 4 + dStar * s ** 6);
+  return { lat: (lat * 180) / Math.PI, lon: 15 + (dLambda * 180) / Math.PI };
+}
+
+// A CSV file for Swedish Excel: semicolons, decimal commas, a byte-order mark.
+function downloadCsv(filename, header, rows) {
+  const cell = (v) => {
+    const s = v === null || v === undefined ? '' : typeof v === 'number' ? String(v).replace('.', ',') : String(v);
+    return /[";\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const csv = `﻿${header.join(';')}\n${rows.map((r) => r.map(cell).join(';')).join('\n')}`;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+const faceNote = (f) => [
+  f.described ? `described, not measured: ${f.described}` : '',
+  // The tool reports 0 kWh/kWp where no panel fits at all.
+  !f.panels && f.kwh_per_kwp > 0 ? `too little sun for panels${f.roof_tilt > 60 ? ' (almost vertical)' : /N/.test(f.direction) ? ' (north-facing)' : ''}` : '',
+  !f.panels && !f.kwh_per_kwp ? 'too small or too steep for panels' : '',
+  f.obstacle_m2 ? `${fmtNum(f.obstacle_m2, 1)} m² kept free (bulge or chimney)` : '',
+].filter(Boolean).join('; ');
+
+// Collapsed by default: the facts an installer needs for a quote.
+function installerHtml(data, buildings) {
+  const site = buildings.map((b) => ({ b, ...sweref99tmToWgs84(b.n, b.e) }));
+  const faces = buildings.flatMap((b) => b.faces.filter((f) => f.area_m2 >= 4).map((f) => ({ b, f })));
+  const bill = BILL[0];
+  return `
+    <div class="card" id="solar-installers">
+      <details>
+        <summary><strong>For installers: positions, roof faces and the grid connection</strong> <span class="subtle">for a quote; to be checked on a site visit</span></summary>
+        <p>Emmaboda Golfklubb’s buildings, the roof faces measured from Lantmäteriet’s laser scans, and the facts about the grid connection. Use <strong>All roofs</strong> above to see every building in 3D.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Building</th><th>Position (WGS 84)</th><th>SWEREF 99 TM (N, E)</th><th class="num">Panels</th><th class="num">kWp</th><th>Roof</th></tr></thead>
+          <tbody>${site.map(({ b, lat, lon }) => `<tr>
+            <td>${SUGGESTED_ROOFS.includes(b.key) ? '<strong>' : ''}${esc(b.name)}${SUGGESTED_ROOFS.includes(b.key) ? '</strong>' : ''}</td>
+            <td class="mono"><a href="https://www.openstreetmap.org/?mlat=${lat.toFixed(6)}&amp;mlon=${lon.toFixed(6)}#map=19/${lat.toFixed(6)}/${lon.toFixed(6)}" target="_blank" rel="noopener">${lat.toFixed(5)}, ${lon.toFixed(5)}</a></td>
+            <td class="mono">${b.n}, ${b.e}</td>
+            <td class="num">${b.panels}</td><td class="num">${fmtNum(b.kwp, 1)}</td>
+            <td class="subtle">${esc(b.roof)}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Building</th><th>Roof face</th><th class="num">Faces (azimuth)</th><th class="num">Pitch</th><th class="num">Area</th><th class="num">Usable</th><th class="num">Panels</th><th class="num">kWp</th><th class="num">kWh per kWp</th><th>Note</th></tr></thead>
+          <tbody>${faces.map(({ b, f }) => `<tr>
+            <td>${esc(b.name.replace(/ \(.*\)/, ''))}</td>
+            <td>${f.flat ? 'flat' : esc(f.direction)}${f.described ? ' (lean-to)' : ''}</td>
+            <td class="num">${f.flat ? '–' : `${fmtNum(f.azimuth, 0)}°`}</td>
+            <td class="num">${fmtNum(f.roof_tilt, 0)}°</td>
+            <td class="num">${fmtNum(f.area_m2, 0)} m²</td>
+            <td class="num">${fmtNum(f.usable_m2, 0)} m²</td>
+            <td class="num">${f.panels || '–'}</td>
+            <td class="num">${f.panels ? fmtNum(f.kwp, 1) : '–'}</td>
+            <td class="num">${f.panels ? fmtNum(f.kwh_per_kwp, 0) : '–'}</td>
+            <td class="subtle">${esc(faceNote(f))}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+        <p class="subtle">Azimuth from north (90° east, 180° south). Area is the sloping roof area; usable is what is left 0.5 m from the edges and clear of bulges and the chimney. Panels in the model: ${fmtNum(data.panel.wp, 0)} Wp, ${fmtNum(data.panel.w, 2)} × ${fmtNum(data.panel.h, 2)} m. Edges are good to about ±0.5 m; vents, skylights and tree shade are not in the laser data.</p>
+        <h3 style="margin-top:14px">The connection</h3>
+        <ul>
+          <li><strong>Grid:</strong> E.ON Elnät, tariff ${esc(GRID_2027.tariff)} (400 V, effect tariff), price area SE4; main fuse 125 A. Production above 43.5 kW pays a grid energy fee from 2027, so the export should stay below that.</li>
+          <li><strong>Connection point:</strong> the office building’s distribution point (kanslipunkt), which feeds back to the meter. The office building and the studio are next to it; whether it can take about 30 kW must be confirmed with the club’s electrician.</li>
+          <li><strong>Old office:</strong> a new aluminium cable from the office building is about to be laid (the trench is dug); it can be sized for panels on the old office.</li>
+          <li><strong>Consumption:</strong> ${fmtNum(bill.kwh, 0)} kWh over ${esc(bill.period)}, most of it in the daytime in the golf season, so nearly all of an office + studio system would be used on site. The measured consumption per quarter hour can be downloaded below.</li>
+        </ul>
+        <h3 style="margin-top:14px">Please price</h3>
+        <ul>
+          <li>A turnkey system on the office building and the studio (about 30 kWp), as a price per kWp excl. VAT: panels, inverter, mounting, cabling, installation and grid notification, with scaffolding or lift stated separately.</li>
+          <li>As options: the old office (about 12 kWp, once its roof is repaired) and the barn (about 90 kWp on a new roof after asbestos removal).</li>
+          <li>The inverter’s warranty and expected life, and what a replacement would cost.</li>
+        </ul>
+        <div class="filters">
+          <button id="solar-csv-faces">Download the roof faces (CSV)</button>
+          <button id="solar-csv-consumption">Download consumption per quarter hour, last 12 months (CSV)</button>
+          <span id="solar-csv-note" class="subtle"></span>
+        </div>
+      </details>
+    </div>`;
+}
+
+function bindInstallerDownloads(data, buildings) {
+  $('#solar-csv-faces')?.addEventListener('click', () => {
+    const rows = buildings.flatMap((b) => {
+      const p = sweref99tmToWgs84(b.n, b.e);
+      return b.faces.filter((f) => f.area_m2 >= 4).map((f) => [
+        b.name, Number(p.lat.toFixed(6)), Number(p.lon.toFixed(6)), b.n, b.e,
+        f.flat ? 'flat' : f.direction, f.flat ? '' : f.azimuth, f.roof_tilt, f.area_m2, f.usable_m2,
+        f.panels, f.kwp, f.panels ? f.kwh_per_kwp : '', f.kwh_year, faceNote(f),
+      ]);
+    });
+    downloadCsv('emmaboda-gk-roof-faces.csv', ['building', 'lat_wgs84', 'lon_wgs84', 'n_sweref99tm', 'e_sweref99tm', 'faces', 'azimuth_deg', 'pitch_deg', 'area_m2', 'usable_m2', `panels_${data.panel.wp}wp`, 'kwp', 'kwh_per_kwp', 'kwh_year', 'note'], rows);
+  });
+  $('#solar-csv-consumption')?.addEventListener('click', async () => {
+    const note = $('#solar-csv-note');
+    note.textContent = 'Loading the meter values…';
+    try {
+      const { eon } = await loadMeterInputs();
+      const inst = (eon?.installations || []).find((i) => i.quarter);
+      if (!inst) throw new Error('no quarter-hour meter values');
+      const quarters = [...expandSeries(inst.quarter).entries()].sort((x, y) => x[0] - y[0]);
+      const from = quarters.at(-1)[0] - 365 * DAY_MS;
+      const local = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const rows = quarters.filter(([t]) => t > from).map(([t, kwh]) => [local.format(t), new Date(t).toISOString(), Math.round(kwh * 1000) / 1000, Math.round(kwh * 4 * 100) / 100]);
+      downloadCsv('emmaboda-gk-consumption-per-quarter-hour.csv', ['start_swedish_time', 'start_utc', 'kwh', 'average_kw'], rows);
+      note.textContent = `${fmtNum(rows.length, 0)} quarter hours, the whole facility as E.ON measures it.`;
+    } catch (err) {
+      note.textContent = `Could not load the meter values (${err.message}).`;
+    }
+  });
+}
+
 async function renderSolar() {
   const root = $('#view-solar');
   state.solar ||= { show: 'suggested', data: null, view: null, sunDay: 'summer', sunHour: 13 };
@@ -2479,8 +2619,10 @@ async function renderSolar() {
         <li><strong>Check before buying:</strong> the studio roof (the laser data says it slopes 13° to the north, not flat), the office’s distribution point capacity with the electrician, quotes from 2–3 installers. The barn’s asbestos roof and the old office’s split roof come first (the card above).</li>
       </ul>
     </div>
+    ${installerHtml(s.data, buildings)}
     <div class="subtle">Roofs: Lantmäteriet’s laser scans (2019 and 2026 merged, about 1.2 points/m²) and building outlines, processed by tools/roof-solar; tilts and directions are reliable, edges to about ±0.5 m, and chimneys, vents, skylights and tree shade are not in the data. Yield per roof face: PVGIS (EU JRC), checked against SMHI STRÅNG for the actual weather. Value: the club’s E.ON quarter-hour meter values with SE4 quarter-hour spot prices, the contract surcharge and E.ON Elnät’s 2027 prices (tools/roof-solar/simulate.mjs). Installed price per kWp is an assumption until quotes arrive.</div>`;
 
+  bindInstallerDownloads(s.data, buildings);
   $('#solar-show').addEventListener('click', (event) => {
     const chip = event.target.closest('[data-show]');
     if (!chip) return;

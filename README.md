@@ -10,14 +10,22 @@ the OCPI API that ChargeNode exposes for the chargers.
   meter, split into the chargers' (estimated) part and everything else, the
   limits in force, when the peaks happen and which loads probably cause them
   (`public/facility.js`), monthly billed peaks, and a cost breakdown worked out
-  from the meter values. See [Grid meter (E.ON)](#grid-meter-eon).
+  from the meter values, with the energy priced per quarter hour at the SE4
+  spot price. See [Grid meter (E.ON)](#grid-meter-eon).
 - **Analysis** - how often several chargers run at once, the busy hours
   (weekday × hour heatmap) and an estimate of the effektavgift the chargers
   alone would cause, computed from the charge records.
 - **Economics** - what the chargers earn and cost, the break-even price, whether
   the winter ceiling or a night stop pays, what can be negotiated in the
   electricity contracts (from E.ON's cost export, `public/contracts.js`, with
-  E.ON Elnät's 2027 prices) and where solar helps most.
+  E.ON Elnät's 2027 prices), including E.ON's surcharge worked out from the
+  bill and the quarter-hour spot prices.
+- **Solar** - would solar panels pay? The club's roofs in 3D from
+  Lantmäteriet's laser scans with the panels that fit and the sun's path, what
+  each roof would save (simulated per quarter hour on the club's own
+  consumption), the roof work for the board (the barn's asbestos roof, the old
+  office's split roof) and a collapsible section for installers. See
+  [Solar tab](#solar-tab).
 - **Chargers** - three sub-tabs: *Live* (power in use right now, which charging
   points are charging / available / out of service), *Records* (charge detail
   records: sessions, kWh, cost, time plugged in, energy per day, per-charger
@@ -325,8 +333,9 @@ anläggnings-id (only a short hash of it) nor the organisation number.
 ## Economics tab
 
 Per year and for the last 12 full months: charging revenue (excl. VAT), the
-electricity it took (kWh × energy + transfer + energy tax from the Meter tab's
-tariff), ChargeNode's fee, this system's cost, and the effektavgift the
+electricity it took (each month's kWh at what the energy cost in the hours the
+cars charged, from the Meter tab's quarter-hour pricing; the flat tariff
+without meter values), ChargeNode's fee, this system's cost, and the effektavgift the
 chargers added. That last one is measured from the E.ON values where they
 exist (billed peak with the chargers − billed peak without them); without
 them it is a range from nothing to the worst case (the chargers' own monthly
@@ -339,6 +348,12 @@ effektavgift the chargers would add without the 25 kW whole-facility ceiling,
 minus what they add with it, against the margin on the charging the ceiling
 holds back (an upper bound, since held-back charging is often only delayed),
 and compares 20, 25, 30 and 35 kW for the last winter.
+
+*What can be negotiated* splits E.ON's bill into its parts. Priced quarter by
+quarter on the meter values, the contract's spot part was 80.4 öre/kWh in Jul
+2025 – Jun 2026, so E.ON's surcharge, fees and certificates came to about
+8.0 öre/kWh: the number to compare other retailers' offers with. The 2027 grid
+energy fee uses the spot price the club actually paid.
 
 Costs are set on the tab and saved in the browser. ChargeNode charges the club
 60 kr per outlet (uttag) per month, i.e. 4,320 kr a year for six. The
@@ -355,6 +370,55 @@ Reference figures used for defaults and the market band:
 - Public AC charging 2026: Mer's plans 3.75–4.98 kr/kWh, Recharge and OKQ8
   5.49 kr/kWh — [Realtid](https://www.realtid.se/efter-chockhojningen-i-hostas-nu-sanker-laddjatten-priserna/),
   [hurbra.se](https://hurbra.se/vad-kostar-det-att-ladda-en-elbil/).
+
+## Solar tab
+
+Would solar panels pay? Everything on the tab comes from two data files built
+by [`tools/roof-solar`](tools/roof-solar/README.md):
+
+- `public/data/solar-roofs.json`: the roofs and the panels that fit, from
+  Lantmäteriet's laser scans (2019 and 2026 merged) and building outlines.
+  Each roof face's pitch and direction is measured. Panels are kept 0.5 m from
+  the edges, off bulges in the roof (patches standing 0.5 m out of the roof
+  plane), and away from obstacles placed by hand from the aerial photo (the
+  chimney on the office building). The golf carts' lean-to on the old office is
+  described by hand, because the laser data is too sparse to measure it: its
+  15° pitch is an assumption to check on site. No aerial photo or raw
+  Lantmäteriet data is published.
+- `public/data/solar-effekt.json`: what each roof and combination saves, from
+  `tools/roof-solar/simulate.mjs`. It runs per quarter hour: the club's
+  measured quarter-hour consumption, each roof face's output from PVGIS (five
+  weather years, checked against SMHI STRÅNG for the actual weather), SE4
+  quarter-hour spot prices with the contract surcharge, and E.ON Elnät's 2027
+  prices. The effektavgift is worked out on the hourly mean bought, as E.ON
+  bills it.
+
+On the tab:
+
+- **The verdict and a 3D model** (three.js, loaded only on this tab) with the
+  panels on rails, the sun's path on 21 Jun, the equinoxes and 21 Dec, and a
+  day/time control that moves the sun and the shadows.
+- **Per building and per roof:** panels, kWp, yield, and the effektavgift and
+  energy saved, with the range over the weather years and the result in the
+  actual weather.
+- **Roof work first:** the barn's eternit roof has asbestos and must be
+  replaced, and the old office's roof is split. Both are costs the club takes
+  anyway; the card shows how far the panels' savings go towards them, and the
+  feeder cable to the old office (the trench is already dug).
+- **What size pays best** for generic east/west roofs, and what the price per
+  kWp covers: a turnkey system incl. inverter and installation (8,000–12,000
+  kr/kWp excl. VAT, an assumption until quotes arrive), not a later inverter
+  swap, roof work, the cable, service or insurance.
+- **For installers** (collapsed): each building's position (WGS 84 with a map
+  link, and SWEREF 99 TM), every roof face's direction, pitch, area and panels,
+  the grid connection (E.ON Elnät, tariff E4N04L, 400 V, 125 A main fuse, SE4,
+  the 43.5 kW export limit), what to price, and CSV downloads of the roof faces
+  and of the measured consumption per quarter hour over the last 12 months.
+
+The figures are estimates and simulations: take them with a grain of salt and
+check them against invoices, quotes and a site visit. To update them after
+new laser data or a changed roof, run `roof_solar.py` with `--publish` and then
+`simulate.mjs` (see the tool's README).
 
 ## Limits
 
@@ -432,7 +496,10 @@ server/eon.js          Meter values: Swedish time stamps -> UTC, series choice, 
 server/eon-demo.js     Invented meter values in E.ON's format, for demo mode
 server/spot.js         SE4 spot prices per quarter hour (elprisetjustnu.se), incremental
 tools/roof-solar/      Roofs from Lantmäteriet's laser data; simulate.mjs: solar per quarter hour (PVGIS, SMHI STRÅNG)
-public/meter.js        Meter maths: chargers vs. the rest, billed peaks, cost breakdown
+public/meter.js        Meter maths: chargers vs. the rest, billed peaks, quarter-hour cost breakdown
+public/solar3d.js      The Solar tab's 3D model: roofs, panels, sun paths (three.js)
+public/contracts.js    The bill, E.ON Elnät's 2027 prices, solar sizes, roof work and the feeder cable
+public/data/           solar-roofs.json and solar-effekt.json for the Solar tab (from tools/roof-solar)
 public/economics.js    Accounts, break-even price, what the limits saved
 server/demo-data.js    Deterministic demo data (OCPI 2.2.1 shaped)
 public/                index.html, styles.css, app.js (no build step)

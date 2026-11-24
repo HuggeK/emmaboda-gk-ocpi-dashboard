@@ -41,9 +41,34 @@ or, with the surface model, `--dsm "$gis\y2026_b2-626_53_5050_dsm.tif"` instead 
 The laser files are read only around the club (PDAL reads just that part of
 the 2.5 × 2.5 km tile) and turned into a 0.5 m surface model in `out/`.
 
-It writes `tools/roof-solar/out/roofs.json` (git-ignored). The buildings and
-their coordinates (SWEREF 99 TM) are at the top of `roof_solar.py`; the
-coordinate must be on the roof.
+It writes `tools/roof-solar/out/roofs.json` (git-ignored). Add
+`--publish public\data\solar-roofs.json` to also write the compact copy the
+dashboard's Solar tab reads (geometry and results only, no aerial photo).
+
+The buildings and their coordinates (SWEREF 99 TM) are at the top of
+`roof_solar.py`; the coordinate must be on the roof. Two things can be added to
+a building by hand, for what the laser data cannot see:
+
+- `obstacles`: a point and a radius that no panel may come within, e.g. the
+  chimney on the office building's west roof, placed from the aerial photo.
+- `lean_tos`: a lower-pitched strip along one side (`side`, `depth_m`,
+  `tilt`), e.g. the golf carts' lean-to on the old office: 2.5 m deep from
+  the photo, 15° assumed. It becomes a face of its own with one landscape row.
+
+## 2b. Simulate what the roofs save
+
+```powershell
+node tools\roof-solar\simulate.mjs <snapshot.json> --with-strang
+```
+
+with the published snapshot (`https://huggek.github.io/emmaboda-gk-ocpi-dashboard/data/snapshot.json`,
+saved locally). It runs every roof and combination per quarter hour on the
+club's measured consumption (Nov 2025 – Oct 2026 by default, `--from`/`--to`),
+with SE4 quarter-hour spot prices from the snapshot, PVGIS output for each roof
+face, and with `--with-strang` the same roofs in the actual weather from SMHI
+STRÅNG. It writes `public/data/solar-effekt.json`; `--sizes <file>` also
+writes the generic east/west sizes for `SOLAR_SIMULATION` in
+`public/contracts.js`.
 
 ## 3. Look at it
 
@@ -63,16 +88,22 @@ Then open <http://127.0.0.1:8765/>.
 2. **Roof faces.** Tilt and compass direction for every cell from the smoothed
    surface; cells are grouped into faces by direction (8 sectors, or flat
    below 8°). Patches under 4 m² are ignored.
-3. **Panels.** 1.13 × 1.76 m (430 Wp) in portrait rows along each face, 0.5 m
-   from its edges. Flat roofs get east–west racks at 10°.
-4. **Yield.** PVGIS (EU JRC) for each face's tilt and direction. Faces under
+3. **Bulges.** A plane is fitted to each face; patches of at least 2 m²
+   standing more than 0.5 m out of it (a bulge, a dormer) get no panels. The
+   thresholds are tuned on the club's roofs: lower ones mark laser noise.
+4. **Panels.** 1.13 × 1.76 m (430 Wp) in rows along each face, 0.5 m from its
+   edges, portrait or landscape, whichever fits more; every cell under a panel
+   must be usable. Flat roofs get east–west racks at 10°.
+5. **Yield.** PVGIS (EU JRC) for each face's tilt and direction. Faces under
    650 kWh/kWp a year (north-facing) are reported but get no panels.
-5. **Value and payback** in the viewer: 1.25 kr per kWh used on site (from the
+6. **Value and payback** in the viewer: 1.27 kr per kWh used on site (from the
    simulation on the club's own load with 2027 grid prices), at
-   8,000 / 10,000 / 12,000 kr per installed kWp.
+   8,000 / 10,000 / 12,000 kr per installed kWp (turnkey, incl. inverter and
+   installation). The dashboard's Solar tab uses the full simulation instead.
 
-A planning sketch, not an installer's drawing: chimneys, vents, skylights,
-shading from nearby trees and the roof's load capacity are not included.
+A planning sketch, not an installer's drawing: vents, skylights, shading from
+nearby trees and the roof's load capacity are not included, and edges are
+good to about ±0.5 m.
 
 `make_test_dsm.py` makes a synthetic surface model with roofs of known shape
 (gable roofs at 27° and 35°, a flat roof, a tree), and `make_test_laser.py`

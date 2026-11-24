@@ -64,8 +64,81 @@ def read_window(ds, e, n, size):
     return z, px, origin
 
 
-def grow_roof(z, px, seed_rc, min_above=1.5, max_step=0.6):
+def laser_to_dsm(laz_files, out_tif, bounds, px=0.5):
+    """A surface model from Lantmäteriet's laser point clouds (COPC/LAZ) with
+    QGIS's PDAL: the highest point per cell, gaps filled from neighbours, noise
+    (class 7) left out. Several flights are merged for a denser cloud."""
+    import subprocess
+    import tempfile
+    xmin, xmax, ymin, ymax = bounds
+    region = f"([{xmin},{xmax}],[{ymin},{ymax}])"
+    stages = [{"type": "readers.copc" if f.lower().endswith(".copc.laz") else "readers.las", "filename": f, **({"bounds": region} if f.lower().endswith(".copc.laz") else {})} for f in laz_files]
+    if len(laz_files) > 1:
+        stages.append({"type": "filters.merge"})
+    stages += [
+        {"type": "filters.crop", "bounds": region},
+        {"type": "filters.range", "limits": "Classification![7:7]"},
+        {"type": "writers.gdal", "filename": out_tif, "resolution": px, "output_type": "max", "window_size": 3,
+         "data_type": "float32", "nodata": -9999, "bounds": region, "gdaldriver": "GTiff"},
+    ]
+    pdal = os.path.join(os.path.dirname(sys.executable), "pdal.exe")
+    if not os.path.exists(pdal):
+        pdal = "pdal"
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        json.dump({"pipeline": stages}, fh)
+        pipeline = fh.name
+    subprocess.run([pdal, "pipeline", pipeline], check=True)
+    os.unlink(pipeline)
+    return out_tif
+
+
+def footprint_mask(buildings_path, e, n, origin, px, shape):
+    """The building outline from Lantmäteriet's Byggnad data that contains the
+    point, rasterised onto the window; None if no outline contains it."""
+    from osgeo import ogr
+    path = buildings_path
+    if path.lower().endswith(".zip"):
+        inner = [f for f in gdal.ReadDir(f"/vsizip/{path}") or [] if f.lower().endswith(".gpkg")]
+        if not inner:
+            return None
+        path = f"/vsizip/{path}/{inner[0]}"
+    ds = ogr.Open(path)
+    point = ogr.CreateGeometryFromWkt(f"POINT ({e} {n})")
+    for i in range(ds.GetLayerCount()):
+        layer = ds.GetLayerByIndex(i)
+        if layer.GetGeomType() not in (ogr.wkbPolygon, ogr.wkbMultiPolygon, ogr.wkbPolygon25D, ogr.wkbMultiPolygon25D, ogr.wkbMultiSurface, ogr.wkbCurvePolygon):
+            continue
+        layer.SetSpatialFilterRect(e - 1, n - 1, e + 1, n + 1)
+        for feat in layer:
+            geom = feat.GetGeometryRef()
+            if geom is not None and geom.Contains(point):
+                mem = gdal.GetDriverByName("MEM").Create("", shape[1], shape[0], 1, gdal.GDT_Byte)
+                mem.SetGeoTransform((origin[0], px, 0, origin[1], 0, -px))
+                drv = ogr.GetDriverByName("MEM") or ogr.GetDriverByName("Memory")
+                mds = drv.CreateDataSource("m")  # keep a reference: the layer dies with it
+                mlayer = mds.CreateLayer("b")
+                f2 = ogr.Feature(mlayer.GetLayerDefn())
+                f2.SetGeometry(geom.Clone())
+                mlayer.CreateFeature(f2)
+                gdal.RasterizeLayer(mem, [1], mlayer, burn_values=[1])
+                return mem.GetRasterBand(1).ReadAsArray().astype(bool)
+    return None
+
+
+def ortho_png(ortho_path, origin, px, shape, scale=2):
+    """The aerial photo under the window, as a PNG data URL."""
+    xmin, ymax = origin
+    xmax, ymin = xmin + shape[1] * px, ymax - shape[0] * px
+    out = gdal.Translate("/vsimem/ortho.tif", ortho_path, projWin=[xmin, ymax, xmax, ymin], width=shape[1] * scale, height=shape[0] * scale, bandList=[1, 2, 3])
+    rgb = np.dstack([out.GetRasterBand(i).ReadAsArray() for i in (1, 2, 3)]).astype(np.uint8)
+    out = None
+    gdal.Unlink("/vsimem/ortho.tif")
+    return png_b64(rgb)
+
+
+def grow_roof(z, px, seed_rc, min_above=1.5, max_step=None):
     """Cells connected to the seed over a smooth surface raised above the ground."""
+    max_step = max_step or max(0.6, 1.2 * px)  # coarser cells allow bigger steps on steep roofs
     ground = np.nanpercentile(z, 5)
     above = z - ground
     rows, cols = z.shape
@@ -95,7 +168,7 @@ def grow_roof(z, px, seed_rc, min_above=1.5, max_step=0.6):
         for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
             rr, cc = r + dr, c + dc
             if 0 <= rr < rows and 0 <= cc < cols and not mask[rr, cc]:
-                if above[rr, cc] > min_above and abs(zf[rr, cc] - zf[r, c]) < max_step and rough[rr, cc] < 0.25:
+                if above[rr, cc] > min_above and abs(zf[rr, cc] - zf[r, c]) < max_step and rough[rr, cc] < (0.25 if px < 0.4 else 0.4):
                     mask[rr, cc] = True
                     queue.append((rr, cc))
     mask = ndimage.binary_closing(mask, iterations=2) & (above > min_above)
@@ -228,16 +301,36 @@ def compass(az):
     return ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][int(round(az / 45)) % 8]
 
 
-def analyse(ds, b):
+def analyse(ds, b, buildings=None, ortho=None):
     z, px, origin = read_window(ds, b["e"], b["n"], WINDOW)
     seed = (int((origin[1] - b["n"]) / px), int((b["e"] - origin[0]) / px))
-    mask, ground = grow_roof(z, px, seed)
-    if mask is None or mask.sum() < 40:
+    outline = footprint_mask(buildings, b["e"], b["n"], origin, px, z.shape) if buildings else None
+    if outline is not None:
+        ground = np.nanpercentile(z, 5)
+        mask = outline & (np.nan_to_num(z, nan=ground) - ground > 1.0)
+        source = "building outline (Lantmäteriet)"
+    else:
+        mask, ground = grow_roof(z, px, seed)
+        source = "grown from the point"
+    if mask is None or mask.sum() * px * px < 10:
         return {**b, "error": "No roof found at the coordinate."}
     rr, cc = np.nonzero(mask)
-    r0, r1, c0, c1 = max(0, rr.min() - 12), min(z.shape[0], rr.max() + 13), max(0, cc.min() - 12), min(z.shape[1], cc.max() + 13)
+    pad = int(3 / px)
+    r0, r1, c0, c1 = max(0, rr.min() - pad), min(z.shape[0], rr.max() + pad + 1), max(0, cc.min() - pad), min(z.shape[1], cc.max() + pad + 1)
     zc, mc = z[r0:r1, c0:c1], mask[r0:r1, c0:c1]
+    crop_origin = (origin[0] + c0 * px, origin[1] - r0 * px)
     faces = faces_of(zc, px, mc)
+    if outline is not None and faces:
+        # The outline is exact while sparse laser points blur the edges: give
+        # every cell inside the outline to its nearest roof face.
+        inside = outline[r0:r1, c0:c1]
+        labels = np.zeros(inside.shape, int)
+        for i, f in enumerate(faces):
+            labels[f["mask"]] = i + 1
+        _, (ir, ic) = ndimage.distance_transform_edt(labels == 0, return_indices=True)
+        nearest = labels[ir, ic]
+        for i, f in enumerate(faces):
+            f["mask"] = inside & (nearest == i + 1)
     out_faces = []
     for i, f in enumerate(faces):
         usable, panels = layout(f, px)
@@ -270,7 +363,9 @@ def analyse(ds, b):
         "width": int(zc.shape[1]),
         "height": int(zc.shape[0]),
         "roof_height_m": round(float(np.nanmedian(zc[mc]) - ground), 1),
+        "roof_from": source,
         "image": png_b64(hillshade(zc, px)),
+        "photo": ortho_png(ortho, crop_origin, px, zc.shape) if ortho else None,
         "faces": out_faces,
         "panels": sum(f["panels"] for f in out_faces),
         "kwp": round(sum(f["kwp"] for f in out_faces), 2),
@@ -280,10 +375,24 @@ def analyse(ds, b):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dsm", required=True, help="Lantmäteriet surface model GeoTIFF (SWEREF 99 TM)")
+    ap.add_argument("--dsm", help="Lantmäteriet surface model GeoTIFF (SWEREF 99 TM)")
+    ap.add_argument("--laz", nargs="+", help="Lantmäteriet laser point clouds (.copc.laz); several flights are merged")
+    ap.add_argument("--buildings", help="Lantmäteriet Byggnad download (byggnad_knXXXX.zip or .gpkg) for exact roof outlines")
+    ap.add_argument("--ortho", help="Lantmäteriet orthophoto GeoTIFF, shown under the roofs in the viewer")
+    ap.add_argument("--px", type=float, default=0.5, help="cell size when building a surface model from laser data (m)")
     ap.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "out", "roofs.json"))
-    ap.add_argument("--source", default="Lantmäteriet, Ytmodell från flygbilder 2026 (0.25 m)")
+    ap.add_argument("--source", help="text describing the height data, shown in the viewer")
     args = ap.parse_args()
+    if not args.dsm and not args.laz:
+        ap.error("give --dsm or --laz")
+    if args.laz:
+        es = [b["e"] for b in BUILDINGS]
+        ns = [b["n"] for b in BUILDINGS]
+        bounds = (min(es) - WINDOW, max(es) + WINDOW, min(ns) - WINDOW, max(ns) + WINDOW)
+        os.makedirs(os.path.dirname(args.out), exist_ok=True)
+        args.dsm = laser_to_dsm(args.laz, os.path.join(os.path.dirname(args.out), "laser_dsm.tif"), bounds, args.px)
+        args.source = args.source or f"Lantmäteriet, Laserdata Skog ({len(args.laz)} flight{'s' if len(args.laz) > 1 else ''}), surface model {args.px} m"
+    args.source = args.source or "Lantmäteriet, Ytmodell från flygbilder 2026 (0.25 m)"
     ds = gdal.Open(args.dsm)
     result = {
         "source": args.source,
@@ -291,7 +400,7 @@ def main():
         "buildings": [],
     }
     for b in BUILDINGS:
-        r = analyse(ds, b)
+        r = analyse(ds, b, args.buildings, args.ortho)
         result["buildings"].append(r)
         if r.get("error"):
             print(f"{b['name']}: {r['error']}")

@@ -32,19 +32,19 @@ const state = {
   snapshotError: null,
   locationLabels: new Map(), // evse uid / evse_id -> friendly label
   records: {
-    preset: '30d',
+    preset: 'ytd', // this year
     customFrom: null,
     customTo: null,
     sort: { key: 'start', dir: 'desc' },
     data: null,
   },
   analysis: {
-    preset: '12m',
+    preset: 'ytd', // this year
     options: { ...ANALYSIS_DEFAULTS },
     tableView: false,
   },
   meter: {
-    preset: '30d',
+    preset: 'ytd', // this year
     installation: 0,
     tariff: loadTariff(),
     tableView: false,

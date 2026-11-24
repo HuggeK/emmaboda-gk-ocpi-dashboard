@@ -112,6 +112,10 @@ Things to know:
 
 - GitHub can delay scheduled runs by minutes to hours when the platform is
   busy, so an hourly run may land late or be skipped now and then.
+- Since 23 Nov 2026 GitHub's artifact list sometimes lags the upload, and
+  `deploy-pages` then reports "No artifacts named github-pages were found"
+  although the upload succeeded. The workflow waits 10 s before deploying and
+  retries once after 30 s.
 - Scheduled workflows in *public* repositories are switched off after 60 days
   without commits. This repository is private, so that rule does not apply
   today; if it is ever made public, watch for GitHub's "workflow disabled"

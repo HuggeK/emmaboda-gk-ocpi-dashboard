@@ -89,13 +89,13 @@ workflow in `.github/workflows/snapshot-pages.yml`. Each run:
 
 The workflow runs every hour (at :17), on every push to `main` that touches
 the app, and on demand from the Actions tab (*Snapshot to GitHub Pages* →
-*Run workflow*). Each run is billed as one Actions minute, so hourly runs use
-about 720 of the account's 3,000 minutes a month, and the OCPI specification's
-advice to pull lists "in hours, not minutes" is respected. Change the `cron`
+*Run workflow*). The repository is public, so GitHub-hosted runners cost
+nothing (a private repository would use about 720 of the account's 3,000
+Actions minutes a month), and the OCPI specification's advice to pull lists
+"in hours, not minutes" is respected. Change the `cron`
 line to adjust; `17 6-20 * * *` would limit it to daytime.
 
-The site is public even though the repository is private, so the published
-snapshot leaves out the fields that identify who charged (`token_uid` and
+The site and the repository are public, so the published snapshot leaves out the fields that identify who charged (`token_uid` and
 `contract_id`). Everything else is what the local app shows. In snapshot mode
 the header says "Snapshot · x ago", the Live tab does not auto-refresh, and
 the Records date ranges count back from the snapshot time instead of today.
@@ -116,10 +116,11 @@ Things to know:
   `deploy-pages` then reports "No artifacts named github-pages were found"
   although the upload succeeded. The workflow waits 10 s before deploying and
   retries once after 30 s.
-- Scheduled workflows in *public* repositories are switched off after 60 days
-  without commits. This repository is private, so that rule does not apply
-  today; if it is ever made public, watch for GitHub's "workflow disabled"
-  e-mail.
+- Scheduled workflows in public repositories are switched off after 60 days
+  without activity. To keep the hourly job and the yearly reminder running
+  through quiet months, the 03:xx UTC run re-enables both through GitHub's API,
+  which resets that timer. If GitHub still sends a "workflow disabled" e-mail,
+  enable it again under Actions and run it once.
 - Only `main` may deploy to the `github-pages` environment, so the workflow
   cannot be tested from a branch; it runs for real once merged.
 - GitHub Pages serves every file with a 10-minute cache. The build stamps the

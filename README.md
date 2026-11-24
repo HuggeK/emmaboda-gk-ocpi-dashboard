@@ -275,11 +275,15 @@ plus five back), `EON_SERIES_ID` / `EON_INSTALLATION_ID` to pin a series or
 installation when the automatic choice (active-energy consumption in kWh) is
 wrong. The Connection tab lists the installations and series E.ON offers.
 
-**What each run fetches.** Hourly values since `EON_HISTORY_FROM` (in chunks
-under E.ON's one-year limit) and quarter-hour values for the last 35 days, kept
-for up to 92. Like the charge records, a run extends the previously published
-snapshot and only asks for the last three days again, so an hourly run makes
-about four requests. E.ON publishes values about a day late. An E.ON failure
+**What each run fetches.** Hourly and quarter-hour values since
+`EON_HISTORY_FROM` (in chunks under E.ON's limits of one year and three months).
+Both are kept: the effektavgift is billed on the hourly mean, while the
+electricity contract (P15M) and, from 2027, the grid energy fee are priced per
+quarter hour. Chunks E.ON refuses, such as quarter hours from before the meter
+was read every 15 minutes, are skipped. Like the charge records, a run extends
+the previously published snapshot and only asks for the last three days again,
+so an hourly run makes about four requests; a range the snapshot is missing
+(e.g. older quarter hours) is fetched once. E.ON publishes values about a day late. An E.ON failure
 never fails the run: the previous values are kept, the Meter tab says why, and
 the tracking issue's status line shows `meter ❌`.
 

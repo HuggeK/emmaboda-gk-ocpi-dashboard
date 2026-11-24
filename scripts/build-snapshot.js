@@ -13,6 +13,8 @@
 // and only the records changed since it was built are requested from the CPO
 // (a handful of requests instead of a full history). --full ignores the base
 // and refetches everything from --history-from (default: all the CPO has).
+// SE4 spot prices per quarter hour are always extended from the base: past
+// prices never change.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +24,7 @@ import { buildSnapshot, buildEmptySnapshot } from '../server/snapshot.js';
 import { createEonClient } from '../server/eon-client.js';
 import { createDemoEonClient } from '../server/eon-demo.js';
 import { buildEonData, eonFailure } from '../server/eon.js';
+import { buildSpotData, createDemoSpot } from '../server/spot.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -119,7 +122,10 @@ function writeSite(snapshot) {
     ["import('./solar3d.js')", `import('./solar3d.js?v=${buildId}')`],
   ]);
   // The other modules must import the same analysis.js URL, or the browser loads it twice.
-  rewrite(path.join(outDir, 'meter.js'), [["from './analysis.js'", `from './analysis.js?v=${buildId}'`]]);
+  rewrite(path.join(outDir, 'meter.js'), [
+    ["from './analysis.js'", `from './analysis.js?v=${buildId}'`],
+    ["from './contracts.js'", `from './contracts.js?v=${buildId}'`],
+  ]);
   rewrite(path.join(outDir, 'economics.js'), [["from './analysis.js'", `from './analysis.js?v=${buildId}'`]]);
 
   fs.mkdirSync(path.join(outDir, 'data'), { recursive: true });
@@ -130,7 +136,7 @@ function writeSite(snapshot) {
 // The previously published snapshot, to extend instead of refetching all
 // records. Any problem means a full fetch, never a failed build.
 async function loadBase() {
-  if (!config.baseUrl || config.full || config.demo) return null;
+  if (!config.baseUrl || config.demo) return null;
   const url = `${config.baseUrl}${config.baseUrl.includes('?') ? '&' : '?'}nocache=${Date.now()}`;
   try {
     const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(20_000) });
@@ -202,6 +208,31 @@ async function addEon(snapshot, base) {
   return { eon_result: withData.length ? 'ok' : 'no_data', eon_hours: hours, eon_last: last, eon_error: problems.join('; ') };
 }
 
+// SE4 spot prices per quarter hour, for pricing the meter's quarter values. A
+// failure keeps the previous prices and never fails the build.
+async function addSpot(snapshot, base) {
+  if (config.demo) {
+    snapshot.spot = createDemoSpot({ historyFrom: config.eonHistoryFrom });
+    return { spot_result: 'demo' };
+  }
+  const spotLog = (message) => {
+    if (config.verbose) console.log(`[spot] ${message}`);
+  };
+  try {
+    snapshot.spot = await buildSpotData({ base: base?.spot || null, historyFrom: config.eonHistoryFrom, log: spotLog });
+  } catch (err) {
+    snapshot.spot = base?.spot ? { ...base.spot, error: err.message } : null;
+    const kept = base?.spot ? ' (kept the previous prices)' : '';
+    console.warn(`Spot prices: ${err.message}${kept}`);
+    addSummary(`### Spot prices (SE4)\n\nFailed: ${err.message}${kept}.\n`);
+    return { spot_result: 'error', spot_error: err.message };
+  }
+  const f = snapshot.spot.fetch;
+  console.log(`Spot prices: SE4 per quarter hour up to ${snapshot.spot.last_value_end}; ${f.fetched} day(s) fetched${f.errors.length ? `, ${f.errors.length} failed: ${f.errors[0]}` : ''}`);
+  addSummary(`### Spot prices (SE4)\n\nPer quarter hour up to ${snapshot.spot.last_value_end}, ${f.fetched} day(s) fetched this run.\n`);
+  return { spot_result: 'ok', spot_last: snapshot.spot.last_value_end };
+}
+
 // Set once ChargeNode has accepted the key on the versions endpoint, so a
 // later 401 on a data module can be told apart from a rejected key.
 let keyAccepted = false;
@@ -223,7 +254,7 @@ async function main() {
   let snapshot;
   let dataError = null;
   try {
-    snapshot = await buildSnapshot({ client, generator, base, historyFrom: config.historyFrom });
+    snapshot = await buildSnapshot({ client, generator, base: config.full ? null : base, historyFrom: config.historyFrom });
   } catch (err) {
     // A key that opens versions but not the data modules still gets a
     // published site: the Connection tab can then say why, and the static
@@ -234,6 +265,7 @@ async function main() {
   }
   const eonInfo = await addEon(snapshot, base);
   setOutputs(eonInfo);
+  setOutputs(await addSpot(snapshot, base));
   addSummary(`### Grid meter (E.ON)\n\n${{
     ok: `${eonInfo.eon_hours} hourly values, up to ${eonInfo.eon_last}.${eonInfo.eon_error ? ` Problems: ${eonInfo.eon_error}` : ''}`,
     no_data: `Connected, but no meter values came back. ${eonInfo.eon_error || ''}`,

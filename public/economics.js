@@ -57,7 +57,12 @@ export function account({ records, period, tariff, costs = DEFAULT_COSTS, points
   const kwh = sum(inPeriod, (r) => Number(r.energy_kwh));
   const revenueInclVat = sum(inPeriod, (r) => Number(r.cost_incl_vat ?? (r.cost_excl_vat ?? 0) * 1.25));
   const revenue = sum(inPeriod, revenueExVat);
-  const energyCost = (kwh * (tariff.retailOre + tariff.transferOre + tariff.energyTaxOre)) / 100;
+  // The chargers' energy at what it cost in the month it was charged: with
+  // meter values and spot prices, the quarter-hour prices of the hours they
+  // charged in (monthlyMeter's chargers.energyCost per kWh); else the flat tariff.
+  const flatOre = tariff.retailOre + tariff.transferOre + tariff.energyTaxOre;
+  const oreByMonth = new Map(meterMonths.filter((m) => m.chargerKwh > 1).map((m) => [m.month, (m.chargers.energyCost / m.chargerKwh) * 100]));
+  const energyCost = sum(inPeriod, (r) => (Number(r.energy_kwh) * (oreByMonth.get(monthKey(Date.parse(r.start || r.end))) ?? flatOre)) / 100);
   const chargeNode = c.chargeNodePerPointMonth * points * months.length + (revenue * c.chargeNodeSharePct) / 100 + (kwh * c.chargeNodeOrePerKwh) / 100;
   const paidMonths = months.filter((k) => !c.systemSince || k >= c.systemSince).length;
   const system = (c.eonMeterKrMonth + c.eonCostsKrMonth) * paidMonths + (c.otherKrYear * paidMonths) / 12;

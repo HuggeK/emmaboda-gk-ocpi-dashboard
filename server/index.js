@@ -11,6 +11,7 @@ import { computeLive } from './live.js';
 import { createEonClient, EonError } from './eon-client.js';
 import { createDemoEonClient } from './eon-demo.js';
 import { buildEonData, eonFailure } from './eon.js';
+import { buildSpotData, createDemoSpot } from './spot.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -142,6 +143,32 @@ async function loadEon() {
   });
 }
 
+// SE4 spot prices per quarter hour (server/spot.js), refreshed in the
+// background every 30 minutes. The first load fetches every day since the
+// meter history starts (a minute or so); until then the Meter tab prices
+// energy at the flat tariff.
+let spotData = null;
+let spotLoading = null;
+let spotAt = 0;
+function loadSpot() {
+  const historyFrom = process.env.EON_HISTORY_FROM || '2024-01-01';
+  if (config.demo) return (spotData ||= createDemoSpot({ historyFrom }));
+  if (!spotLoading && Date.now() - spotAt > 30 * 60_000) {
+    spotLoading = buildSpotData({ base: spotData, historyFrom })
+      .then((data) => {
+        spotData = data;
+      })
+      .catch((err) => {
+        console.error(`Spot prices: ${err.message}`);
+      })
+      .finally(() => {
+        spotAt = Date.now();
+        spotLoading = null;
+      });
+  }
+  return spotData;
+}
+
 async function loadAllCdrsForDemo() {
   const { items } = await client.getAll('cdrs', {});
   return { items: items.map(normalizeCdr) };
@@ -226,7 +253,8 @@ async function handleApi(req, res, url) {
   }
 
   if (route === '/api/eon') {
-    sendJson(res, 200, await loadEon());
+    const eon = await loadEon();
+    sendJson(res, 200, eon?.configured === false ? eon : { ...eon, spot: loadSpot() });
     return;
   }
 

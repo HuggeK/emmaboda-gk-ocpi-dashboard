@@ -24,8 +24,6 @@ const DAY_MS = 86_400_000;
 export const STEP_MIN = { hour: 60, quarter: 15 };
 // Longest span E.ON accepts per request (quarter: 3 months, hour: 1 year), with margin.
 const CHUNK_DAYS = { hour: 300, quarter: 80 };
-const QUARTER_FETCH_DAYS = 35; // a full fetch asks for this much quarter-hour detail
-const QUARTER_KEEP_DAYS = 92; // and the snapshot keeps at most this much
 const OVERLAP_DAYS = 3; // an incremental fetch re-asks this far back, catching late corrections
 const MAX_INSTALLATIONS = 4;
 
@@ -168,18 +166,44 @@ function describeInstallation(meta = {}, id) {
 
 const seriesMeta = (s) => (s ? { id: s.id, type: s.seriesType || null, unit: s.unit || null, last_update: s.lastUpdate || null } : null);
 
+// Fetches [fromMs, toMs) in chunks E.ON accepts. A chunk E.ON refuses (for
+// example quarter-hour values from before the meter was read every 15
+// minutes) is skipped and noted; only when every chunk fails is it an error.
 async function fetchRange(client, seriesId, resolution, unit, fromMs, toMs, requests) {
   const merged = new Map();
   const chunkMs = CHUNK_DAYS[resolution] * DAY_MS;
+  let firstError = null;
+  let succeeded = 0;
   for (let start = fromMs; start < toMs; start += chunkMs) {
     const end = Math.min(toMs, start + chunkMs);
     const from = toWall(start);
     const to = toWall(end);
-    const measurements = await client.getMeasurements(seriesId, resolution, { from, to });
+    let measurements;
+    try {
+      measurements = await client.getMeasurements(seriesId, resolution, { from, to });
+    } catch (err) {
+      if (err.details?.code === 'UNAUTHORIZED' || err.details?.code === 'NETWORK') throw err;
+      firstError ||= err;
+      requests.push({ resolution, from, to, values: 0, skipped: err.message });
+      continue;
+    }
+    succeeded += 1;
     requests.push({ resolution, from, to, values: measurements.length });
     for (const [t, v] of measurementsToMap(measurements, resolution, unit)) merged.set(t, v);
   }
+  if (!succeeded && firstError) throw firstError;
   return merged;
+}
+
+// Smallest and largest key of a big map without spreading it into arguments.
+function keyRange(map) {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const k of map.keys()) {
+    if (k < min) min = k;
+    if (k > max) max = k;
+  }
+  return map.size ? { min, max } : null;
 }
 
 export function usableEonInstallation(baseInstallation, seriesId) {
@@ -187,20 +211,32 @@ export function usableEonInstallation(baseInstallation, seriesId) {
 }
 
 // One resolution of one installation, extended from the base when possible.
-async function loadResolution({ client, series, resolution, baseCompact, fullFrom, now, keepFromMs, requests }) {
+// historyChecked: the base already asked E.ON for everything back to fullFrom.
+// If it has not (an older snapshot that kept only recent quarter hours), the
+// missing older range is fetched once.
+async function loadResolution({ client, series, resolution, baseCompact, fullFrom, now, requests, historyChecked = false }) {
   const stepMs = STEP_MIN[resolution] * MINUTE_MS;
   const baseMap = expandSeries(baseCompact);
-  const baseLast = baseMap.size ? Math.max(...baseMap.keys()) : null;
-  const incremental = baseLast !== null;
-  const fromMs = incremental ? stockholmMidnight(baseLast - OVERLAP_DAYS * DAY_MS) : fullFrom;
+  const range = keyRange(baseMap);
+  const incremental = range !== null;
+  const fromMs = incremental ? stockholmMidnight(range.max - OVERLAP_DAYS * DAY_MS) : fullFrom;
   const toMs = stockholmMidnight(now + DAY_MS); // up to the end of today
   const fetched = await fetchRange(client, series.id, resolution, series.unit, fromMs, toMs, requests);
   const merged = new Map(baseMap);
   for (const [t, v] of fetched) merged.set(t, v);
-  if (keepFromMs) for (const t of merged.keys()) if (t < keepFromMs) merged.delete(t);
+  let backfilled = 0;
+  if (incremental && !historyChecked && range.min > fullFrom + DAY_MS) {
+    try {
+      const older = await fetchRange(client, series.id, resolution, series.unit, fullFrom, stockholmMidnight(range.min), requests);
+      for (const [t, v] of older) merged.set(t, v);
+      backfilled = older.size;
+    } catch {
+      // nothing older exists; noted in the requests list
+    }
+  }
   return {
     compact: compactSeries(merged, STEP_MIN[resolution]),
-    info: { incremental, fetched_from: new Date(fromMs).toISOString(), fetched: fetched.size, step_ms: stepMs },
+    info: { incremental, fetched_from: new Date(fromMs).toISOString(), fetched: fetched.size, backfilled, step_ms: stepMs },
   };
 }
 
@@ -223,8 +259,6 @@ export async function buildEonData({
 
   const [hy, hm, hd] = String(historyFrom).slice(0, 10).split('-').map(Number);
   const fullFrom = wallToUtc(hy, hm || 1, hd || 1);
-  const quarterFullFrom = stockholmMidnight(nowMs - QUARTER_FETCH_DAYS * DAY_MS);
-  const quarterKeepFrom = stockholmMidnight(nowMs - QUARTER_KEEP_DAYS * DAY_MS);
   const baseByRef = new Map((base?.installations || []).map((i) => [i.ref, i]));
 
   const out = [];
@@ -247,6 +281,7 @@ export async function buildEonData({
 
     const previous = baseByRef.get(entry.ref);
     const extend = !full && usableEonInstallation(previous, chosen.id);
+    entry.history_from = extend ? { ...(previous.history_from || {}) } : {};
     const requests = [];
     entry.fetch = { requests };
     for (const resolution of ['hour', 'quarter']) {
@@ -256,13 +291,15 @@ export async function buildEonData({
           series: chosen,
           resolution,
           baseCompact: extend ? previous[resolution === 'hour' ? 'hourly' : 'quarter'] : null,
-          fullFrom: resolution === 'hour' ? fullFrom : quarterFullFrom,
+          fullFrom,
           now: nowMs,
-          keepFromMs: resolution === 'quarter' ? quarterKeepFrom : null,
           requests,
+          historyChecked: Boolean(extend && previous.history_from?.[resolution] && Date.parse(previous.history_from[resolution]) <= fullFrom),
         });
         entry[resolution === 'hour' ? 'hourly' : 'quarter'] = compact;
         entry.fetch[resolution] = info;
+        // Everything back to fullFrom has now been asked for once.
+        entry.history_from = { ...(entry.history_from || {}), [resolution]: new Date(fullFrom).toISOString() };
       } catch (err) {
         // Quarter values only exist for quarter-metered installations; an
         // hourly failure keeps whatever the previous snapshot had.

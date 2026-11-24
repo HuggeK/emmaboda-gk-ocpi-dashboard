@@ -105,12 +105,24 @@ test('buildEonData on the demo API: hourly + quarter values, no raw installation
   assert.ok(!text.includes('735999000000000001'), 'the anläggnings-id must not be published');
   assert.ok(!text.includes('000000-0000'), 'the org number must not be published');
 
-  // Extending: a second build asks only for the last few days.
-  const again = await buildEonData({ client, now, base: eon });
+  // Extending: a second build with the same history asks only for the last few days.
+  const historyFrom = toWall(now - 60 * 86_400_000).slice(0, 10);
+  const again = await buildEonData({ client, now, base: eon, historyFrom });
   const fetch = again.installations[0].fetch;
   assert.equal(fetch.hour.incremental, true);
   assert.ok(fetch.hour.fetched < 5 * 24);
+  assert.equal(fetch.quarter.backfilled, 0);
   assert.deepEqual(again.installations[0].hourly.values.length, inst.hourly.values.length);
+
+  // A longer history than the base was built with is filled in once (quarter
+  // hours too, which older snapshots kept only for the last weeks)...
+  const longer = await buildEonData({ client, now, base: again, historyFrom: toWall(now - 200 * 86_400_000).slice(0, 10) });
+  assert.ok(longer.installations[0].fetch.quarter.backfilled > 100 * 96);
+  assert.ok(longer.installations[0].quarter.values.length > inst.quarter.values.length * 3);
+  // ...and not asked for again on the next run.
+  const next = await buildEonData({ client, now, base: longer, historyFrom: toWall(now - 200 * 86_400_000).slice(0, 10) });
+  assert.equal(next.installations[0].fetch.quarter.backfilled, 0);
+  assert.ok(next.installations[0].fetch.requests.length <= 2);
 });
 
 test('eonFailure keeps the previous values and the reason', () => {

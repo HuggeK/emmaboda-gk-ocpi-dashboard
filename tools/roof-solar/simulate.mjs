@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const M = await import(new URL('../../public/meter.js', import.meta.url));
 const A = await import(new URL('../../public/analysis.js', import.meta.url));
-const { GRID_2027 } = await import(new URL('../../public/contracts.js', import.meta.url));
+const { GRID_2027, SOLAR_STEPS } = await import(new URL('../../public/contracts.js', import.meta.url));
 
 const args = process.argv.slice(2);
 const arg = (flag, fallback) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : fallback);
@@ -34,6 +34,18 @@ const snapPath = args[0];
 if (!snapPath || snapPath.startsWith('--')) throw new Error('usage: simulate.mjs <snapshot.json> [options]');
 const snap = JSON.parse(fs.readFileSync(snapPath, 'utf8'));
 const roofs = JSON.parse(fs.readFileSync(arg('--roofs', path.join(ROOT, 'public/data/solar-roofs.json')), 'utf8'));
+// --exclude kansli:W,studio: leave out roof faces (building:direction) or whole
+// buildings, e.g. a roof that may not get panels (glare, load capacity).
+for (const spec of (arg('--exclude') || '').split(',').filter(Boolean)) {
+  const [key, dir] = spec.split(':');
+  const b = roofs.buildings.find((x) => x.key === key);
+  if (!b) throw new Error(`--exclude: no building ${key}`);
+  if (!dir) { roofs.buildings = roofs.buildings.filter((x) => x !== b); continue; }
+  for (const f of b.faces.filter((x) => (x.flat ? 'flat' : x.direction) === dir)) {
+    b.kwp -= f.kwp; b.kwh_year -= f.kwh_year; b.panels -= f.panels;
+    f.panels = 0; f.kwp = 0; f.kwh_year = 0;
+  }
+}
 const spot = arg('--spot') ? JSON.parse(fs.readFileSync(arg('--spot'), 'utf8')) : snap.spot;
 if (!spot?.values) throw new Error('no spot prices: the snapshot has none, pass --spot');
 const outPath = arg('--out', path.join(ROOT, 'public/data/solar-effekt.json'));
@@ -367,7 +379,10 @@ const combine = (keys) => {
   }
   return out;
 };
-const roofSets = [...buildings.map((b) => [b.key]), ['kansli', 'studio'], ['kansli', 'studio', 'gamla'], buildings.map((b) => b.key)];
+// Each building alone, the purchase steps (SOLAR_STEPS, cumulative) and all roofs.
+const have = new Set(buildings.map((b) => b.key));
+const roofSets = [...buildings.map((b) => [b.key]), ...SOLAR_STEPS.map((s) => s.keys.filter((k) => have.has(k))), buildings.map((b) => b.key)]
+  .filter((keys, i, all) => keys.length && all.findIndex((o) => o.join() === keys.join()) === i);
 const kwpOf = (keys) => keys.reduce((s, k) => s + buildings.find((b) => b.key === k).kwp, 0);
 
 const results = { quarter: [], hour: [] };
@@ -413,6 +428,7 @@ const onSiteValue = (() => {
 const period = `${new Date(from).toLocaleString('en-GB', { month: 'short', year: 'numeric' })} – ${new Date(to - 1).toLocaleString('en-GB', { month: 'short', year: 'numeric' })}`;
 fs.writeFileSync(outPath, `${JSON.stringify({
   period,
+  ...(arg('--exclude') ? { excluded: arg('--exclude') } : {}),
   weatherYears: WEATHER === 'strang' ? `the actual weather, ${period} (SMHI STRÅNG)` : '2019–2023',
   weather: WEATHER,
   ...(WITH_STRANG ? { actualWeather: `SMHI STRÅNG, ${period}; days without STRÅNG values (${strangGapDays().join(', ')}) use the PVGIS mean` } : {}),

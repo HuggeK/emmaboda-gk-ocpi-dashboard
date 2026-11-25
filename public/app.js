@@ -17,7 +17,8 @@ import {
 import { DEFAULT_TARIFF, expandSeries, hourPrices, hourlySpot, meterHours, splitHours, dailyPeaks, monthlyMeter, summarize, seasonalPicture, rateFromMeter, monthlyTopHours, typicalDay } from './meter.js';
 import { FACILITY_LOADS, BASE_LOAD_KW, explainPeak, inHours, loadLabel } from './facility.js';
 import { DEFAULT_COSTS, MARKET_BAND, account, limitSavings, priceAdvice, winterCeilingCheck, nightOffCheck } from './economics.js';
-import { BILL, BILL_PARTS, BILL_SOURCE, FEEDER_CABLE, GRID_2027, ROOF_WORK, SOLAR_SIMULATION, billTotal } from './contracts.js';
+import { cheapestWindow, krPerKwAt, monthPeakSoFar, presenceByMonthHour, priceBands, quarterPrices, swedishParts, typicalLoadByHour } from './now.js';
+import { BILL, BILL_PARTS, BILL_SOURCE, FEEDERS, FEEDER_CABLE, GRID_2027, HOLE_NAMES, RETAIL_CONTRACT, ROOF_WORK, SOLAR_SIMULATION, SOLAR_STEPS, billTotal } from './contracts.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -217,7 +218,7 @@ function referenceTime() {
 }
 
 // -------------------------------------------------------------------- router
-const views = { overview: renderOverview, live: renderLive, records: renderRecords, analysis: renderAnalysis, meter: renderMeter, economics: renderEconomics, solar: renderSolar, chargers: renderChargers, connection: renderConnection, guide: renderGuide };
+const views = { overview: renderOverview, now: renderNow, live: renderLive, records: renderRecords, analysis: renderAnalysis, meter: renderMeter, economics: renderEconomics, solar: renderSolar, chargers: renderChargers, connection: renderConnection, guide: renderGuide };
 
 // Live, Records and the charging points share the Chargers tab, with sub-tabs.
 const CHARGING_TABS = ['live', 'records', 'chargers'];
@@ -241,6 +242,143 @@ function route() {
   views[tab]();
 }
 window.addEventListener('hashchange', route);
+
+// ---------------------------------------------------- Elpris nu (for the staff)
+// In Swedish: for the staff on site. What a kWh costs per quarter hour from
+// now on, when it is cheap, this month's peak so far (the effektavgift's
+// ceiling not to go above) and the room under it hour by hour.
+const svNum = (v, d = 0) => (v === null || v === undefined || Number.isNaN(v) ? '–' : new Intl.NumberFormat('sv-SE', { minimumFractionDigits: d, maximumFractionDigits: d }).format(v));
+const svTime = (t) => new Date(t).toLocaleTimeString('sv-SE', { timeZone: 'Europe/Stockholm', hour: '2-digit', minute: '2-digit' });
+const svDay = (t) => new Date(t).toLocaleDateString('sv-SE', { timeZone: 'Europe/Stockholm', weekday: 'long', day: 'numeric', month: 'long' });
+const PRICE_LEVELS = [
+  { key: 'low', label: 'Billigt', color: '#9ec5f4' },
+  { key: 'mid', label: 'Normalt', color: '#2a78d6' },
+  { key: 'high', label: 'Dyrt', color: '#0d2a52' },
+];
+
+function priceChartSvg(quarters, bands, now) {
+  const W = 960;
+  const H = 200;
+  const pad = { l: 44, r: 8, t: 10, b: 26 };
+  const max = Math.max(...quarters.map((q) => q.totalOre)) * 1.05;
+  const min = Math.min(0, ...quarters.map((q) => q.totalOre));
+  const bw = (W - pad.l - pad.r) / quarters.length;
+  const y = (v) => pad.t + (H - pad.t - pad.b) * (1 - (v - min) / (max - min));
+  const level = (q) => (q.totalOre <= bands.low ? 0 : q.totalOre >= bands.high ? 2 : 1);
+  const bars = quarters.map((q, i) => {
+    const l = PRICE_LEVELS[level(q)];
+    return `<rect x="${(pad.l + i * bw).toFixed(1)}" y="${y(q.totalOre).toFixed(1)}" width="${Math.max(1, bw - 1).toFixed(1)}" height="${(y(min) - y(q.totalOre)).toFixed(1)}" rx="1" fill="${l.color}"><title>${svTime(q.at)}–${svTime(q.at + 15 * 60_000)}: ${svNum(q.totalOre / 100, 2)} kr/kWh (${l.label.toLowerCase()}; spot ${svNum(q.spotOre, 0)} öre)</title></rect>`;
+  }).join('');
+  const ticks = quarters.filter((q) => swedishParts(q.at).hour % 3 === 0 && new Date(q.at).getUTCMinutes() === 0).map((q) => {
+    const x = pad.l + quarters.indexOf(q) * bw;
+    const h = swedishParts(q.at).hour;
+    return `<line x1="${x}" x2="${x}" y1="${pad.t}" y2="${H - pad.b}" class="grid-line"/><text x="${x + 2}" y="${H - 8}" class="axis">${h === 0 ? new Date(q.at).toLocaleDateString('sv-SE', { timeZone: 'Europe/Stockholm', weekday: 'short' }) : `${String(h).padStart(2, '0')}`}</text>`;
+  }).join('');
+  const yt = [0, 0.5, 1, 1.5, 2, 3, 4, 5].filter((v) => v * 100 <= max).map((v) => `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(v * 100)}" y2="${y(v * 100)}" class="grid-line"/><text x="${pad.l - 6}" y="${y(v * 100) + 4}" text-anchor="end" class="axis">${svNum(v, v % 1 ? 1 : 0)}</text>`).join('');
+  const nowX = pad.l + ((now - quarters[0].at) / (15 * 60_000)) * bw;
+  return `<svg class="price-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Elpris per kvart, kr per kWh">
+    ${yt}${ticks}${bars}
+    <line x1="${nowX}" x2="${nowX}" y1="${pad.t}" y2="${H - pad.b}" class="now-line"/><text x="${nowX + 3}" y="${pad.t + 10}" class="axis now-label">nu</text>
+  </svg>`;
+}
+
+async function renderNow() {
+  const root = $('#view-now');
+  root.innerHTML = '<div class="loading">Hämtar priser och mätvärden...</div>';
+  let inputs;
+  try {
+    inputs = await loadMeterInputs();
+  } catch (err) {
+    root.innerHTML = `<div class="notice error"><h3>Inga data</h3>${esc(err.message)}</div>`;
+    return;
+  }
+  const { eon } = inputs;
+  const now = Date.now();
+  const tariff = { ...DEFAULT_TARIFF, ...(state.meter?.tariff || {}) };
+  const quarters = eon?.spot ? quarterPrices(eon.spot, now, tariff) : [];
+  const inst = (eon?.installations || []).find((i) => i.hourly || i.quarter);
+  const hours = inst ? meterHours(inst) : new Map();
+  const peak = hours.size ? monthPeakSoFar(hours, now) : null;
+  const typical = hours.size ? typicalLoadByHour(hours, now) : null;
+  const lastMeter = hours.size ? Math.max(...hours.keys()) + 3_600_000 : null;
+  const krPerKw = krPerKwAt(now);
+  // What the peak hour was: the meter sees the whole facility, the chargers
+  // included; their share is estimated from the charge records, as on the
+  // Meter tab, and the rest is matched to the energy analysis's loads.
+  let peakWhy = null;
+  if (peak) {
+    const chargerKw = Math.min(peak.kw, hourlyProfile(inputs.records || [], state.analysis.options).get(peak.at)?.kw || 0);
+    const why = explainPeak({ at: peak.at, meterKw: peak.kw, chargerKw }, { isWinter });
+    const SV_LOADS = { irrigation: 'bevattningspumparna', daytime: 'klubbhus, restaurang, camping och golfbilsladdning', heating: 'uppvärmningen (elvärme och värmepumpar)', base: 'grundlasten (kyl, frys, pumpar, belysning)', unexplained: 'ingen tydlig last enligt energianalysen' };
+    const others = why.causes.filter((c) => c.key !== 'chargers').map((c) => SV_LOADS[c.key] || c.key);
+    peakWhy = { chargerKw, restKw: peak.kw - chargerKw, others };
+  }
+  if (!quarters.length) {
+    root.innerHTML = `<div class="view-head"><h2>Elpris nu</h2></div><div class="notice warn"><h3>Inga kommande priser</h3>Spotpriserna för de närmaste timmarna finns inte i datat ännu. Morgondagens priser publiceras runt kl. 13.</div>`;
+    return;
+  }
+  const bands = priceBands(quarters);
+  const levelOf = (ore) => PRICE_LEVELS[ore <= bands.low ? 0 : ore >= bands.high ? 2 : 1];
+  const cur = quarters[0];
+  const cheap3 = cheapestWindow(quarters, 3);
+  const onTop = cur.retailOre + cur.transferOre + cur.taxOre;
+  const isGrid2027 = now >= new Date(`${GRID_2027.from}T00:00:00`).getTime();
+  // Hour rows: the mean full price of the hour's quarters, the usual load then and the room under the peak.
+  const byHour = new Map();
+  for (const q of quarters) {
+    const h = Math.floor(q.at / 3_600_000) * 3_600_000;
+    const row = byHour.get(h) || { at: h, sum: 0, n: 0 };
+    row.sum += q.totalOre;
+    row.n += 1;
+    byHour.set(h, row);
+  }
+  const rows = [...byHour.values()].slice(0, 24).map((r) => {
+    const t = typical?.[swedishParts(r.at).hour];
+    const room = peak && t?.busy !== null && t?.busy !== undefined ? peak.kw - t.busy : null;
+    return { ...r, ore: r.sum / r.n, t, room };
+  });
+  const tightest = rows.filter((r) => r.room !== null).sort((a, b) => a.room - b.room)[0];
+  root.innerHTML = `
+    <div class="view-head"><h2>Elpris nu</h2><span class="subtle">För personalen: när el är billig, och hur vi undviker att höja månadens effektavgift</span></div>
+    <div class="notice"><h3>Priser och snabba fakta om ${esc(new Date(now).toLocaleDateString('sv-SE', { timeZone: 'Europe/Stockholm', month: 'long', year: 'numeric' }))}</h3>Priserna gäller från nu och framåt. Förbrukningen och månadens topp kommer från E.ON:s mätare, som skickar värdena ungefär ett dygn i efterhand: <strong>en topp i dag syns här först i morgon</strong>${lastMeter ? ` (senaste mätvärdet: ${esc(svDay(lastMeter - 1))} kl. ${svTime(lastMeter)})` : ''}. Vi har ännu ingen mätare som läses av direkt; en Carlo Gavazzi-mätare vid matningen planeras till nästa år, och då kan sidan visa den pågående timmen mot månadens topp.</div>
+    <div class="now-tiles">
+      <div class="card tile"><div class="label">Pris just nu (${svTime(cur.at)}–${svTime(cur.at + 15 * 60_000)})</div><div class="value">${svNum(cur.totalOre / 100, 2)} kr/kWh</div><div class="hint"><i class="swatch" style="background:${levelOf(cur.totalOre).color}"></i> ${levelOf(cur.totalOre).label} · exkl. moms</div></div>
+      ${cheap3 ? `<div class="card tile"><div class="label">Billigaste 3 timmarna framåt</div><div class="value">${svTime(cheap3.start)}–${svTime(cheap3.end)}</div><div class="hint">${esc(svDay(cheap3.start))} · snitt ${svNum(cheap3.meanOre / 100, 2)} kr/kWh</div></div>` : ''}
+      ${peak ? `<div class="card tile"><div class="label">Månadens högsta timme hittills</div><div class="value">${svNum(peak.kw, 1)} kW</div><div class="hint">${esc(svDay(peak.at))} kl. ${svTime(peak.at)}–${svTime(peak.at + 3_600_000)}: ${peakWhy && peakWhy.chargerKw >= 0.5 ? `anläggningen ${svNum(peakWhy.restKw, 1)} kW + elbilsladdning ${svNum(peakWhy.chargerKw, 1)} kW (uppskattad)` : 'anläggningen själv, ingen elbilsladdning'}. Håll varje timme under detta</div></div>` : ''}
+      <div class="card tile"><div class="label">Varje kW över toppen kostar</div><div class="value">${svNum(krPerKw, 0)} kr</div><div class="hint">i effektavgift för månaden (exkl. moms)</div></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>Elpris per kvart, kr/kWh exkl. moms</h3><span class="subtle">allt inräknat: spotpris + det vi betalar ovanpå</span></div>
+      ${priceChartSvg(quarters, bands, now)}
+      <div class="series-legend">${PRICE_LEVELS.map((l) => `<span><i class="swatch" style="background:${l.color}"></i>${l.label}</span>`).join('')}<span class="subtle">Billigt = billigaste tredjedelen av kvartarna som visas, dyrt = dyraste tredjedelen. Håll muspekaren över en stapel för exakt pris.</span></div>
+      <p><strong>Vad kostar en kWh ovanpå spotpriset?</strong> Just nu ${svNum(onTop, 0)} öre/kWh: E.ON:s påslag och avgifter ${svNum(cur.retailOre, 0)} öre (påslaget i avtalet är ${svNum(RETAIL_CONTRACT.surchargeOre, 0)} öre, resten är andra avgifter per kWh på fakturan), nätets energiavgift ${svNum(cur.transferOre, 1)} öre${isGrid2027 ? ` (${svNum(GRID_2027.energyOre, 1)} öre + ${svNum(GRID_2027.energySpotPct, 1)} % av spotpriset)` : ` (från 2027: ${svNum(GRID_2027.energyOre, 1)} öre + ${svNum(GRID_2027.energySpotPct, 1)} % av spotpriset)`} och energiskatt ${svNum(cur.taxOre, 0)} öre. Spotpriset just nu: ${svNum(cur.spotOre, 0)} öre. Priset sätts per kvart, så det lönar sig att flytta det som går att flytta till de billiga kvartarna.</p>
+    </div>
+    ${peak && peakWhy ? `<div class="card">
+      <h3>Vad var månadens topp?</h3>
+      <p>${esc(svDay(peak.at))} kl. ${svTime(peak.at)}–${svTime(peak.at + 3_600_000)} drog anläggningen i snitt <strong>${svNum(peak.kw, 1)} kW</strong> enligt E.ON:s mätare. Mätaren ser allt bakom huvudsäkringen, laddboxarna inräknade: ${peakWhy.chargerKw >= 0.5 ? `elbilsladdningen stod för uppskattningsvis <strong>${svNum(peakWhy.chargerKw, 1)} kW</strong> (från laddsessionerna hos ChargeNode) och resten av anläggningen för <strong>${svNum(peakWhy.restKw, 1)} kW</strong>` : `ingen elbil laddade den timmen, så hela toppen var <strong>anläggningen själv</strong>`}. Det som passar tid och årstid enligt energianalysen: ${esc(peakWhy.others.join(', '))}. Grundlasten ligger kring ${svNum(BASE_LOAD_KW, 0)} kW dygnet runt.</p>
+      <p class="subtle">Laddningens andel är en uppskattning: laddsessionerna ger när en bil var inkopplad och hur mycket den laddade, inte exakt effekt minut för minut. Allt annat är inte mätt separat, så ”passar” betyder att tid och storlek stämmer, inte att det är uppmätt.</p>
+    </div>` : ''}
+    ${peak && typical ? `<div class="card">
+      <div class="card-head"><h3>Timme för timme: pris och utrymme under månadens topp</h3><span class="subtle">utrymme = månadens topp (${svNum(peak.kw, 1)} kW) minus vad anläggningen brukar dra den timmen en hög dag</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Timme</th><th class="num">Pris, kr/kWh</th><th>Nivå</th><th class="num">Brukar dra, kW</th><th class="num">En hög dag, kW</th><th class="num">Utrymme, kW</th></tr></thead>
+        <tbody>${rows.map((r) => {
+          const l = levelOf(r.ore);
+          return `<tr><td>${swedishParts(r.at).hour === 0 || r === rows[0] ? `<strong>${esc(svDay(r.at))}</strong> ` : ''}${svTime(r.at)}</td><td class="num">${svNum(r.ore / 100, 2)}</td><td><i class="swatch" style="background:${l.color}"></i> ${l.label}</td><td class="num">${svNum(r.t?.median, 1)}</td><td class="num">${svNum(r.t?.busy, 1)}</td><td class="num">${r.room === null ? '–' : r.room < 3 ? `<strong>${svNum(r.room, 1)}</strong> ⚠` : svNum(r.room, 1)}</td></tr>`;
+        }).join('')}</tbody>
+      </table></div>
+      ${tightest ? `<p class="subtle">Minst utrymme kl. ${svTime(tightest.at)} (${svNum(tightest.room, 1)} kW). ⚠ = under 3 kW kvar: starta inte tunga saker samtidigt då.</p>` : ''}
+    </div>` : ''}
+    <div class="card">
+      <h3>Så gör vi</h3>
+      <ul>
+        <li><strong>Kör det som kan vänta när det är billigt:</strong> tvättmaskiner och torktumlare på campingen, diskmaskin, golfbilsladdning, varmvattenberedare. ${cheap3 ? `Närmast: ${svTime(cheap3.start)}–${svTime(cheap3.end)} ${esc(svDay(cheap3.start))}.` : ''}</li>
+        <li><strong>Sprid ut de tunga lasterna.</strong> Effektavgiften sätts av månadens högsta timme (medeleffekten över en klocktimme). Starta inte allt samtidigt; en timme över ${peak ? `${svNum(peak.kw, 0)} kW` : 'toppen'} kostar ${svNum(krPerKw, 0)} kr per extra kW, för hela månaden.</li>
+        <li><strong>Det dyra är oftast morgon och tidig kväll</strong> på vardagar i vinterhalvåret; det billiga mitt i natten och mitt på dagen när det blåser eller är soligt. Titta här i stället för att gissa: priserna för i morgon kommer runt kl. 13.</li>
+      </ul>
+      <p class="subtle">Priserna är spotpriser för SE4 från Nord Pool per kvart${state.snapshot ? `, hämtade ${esc(fmtDateTime(state.snapshot.status.generated_at))}` : ''}, plus avtalets påslag och avgifter, nätavgift och energiskatt, exkl. moms. Månadens topp och vad anläggningen brukar dra kommer från E.ON:s mätare${lastMeter ? `, som i dag har värden till och med ${esc(svDay(lastMeter - 1))} kl. ${svTime(lastMeter)}` : ''}: E.ON skickar mätvärdena ungefär ett dygn i efterhand, så dagens egen förbrukning syns inte här än. ”Brukar dra” är medianen för samma timme de senaste fyra veckorna, ”en hög dag” den högsta tiondelen.</p>
+    </div>`;
+}
 
 // ---------------------------------------------------- connection indicator
 function paintIndicator() {
@@ -2172,7 +2310,7 @@ function contractsHtml(rows = []) {
       <tbody>${BILL_PARTS.map((p) => `<tr><td>${esc(p.label)}</td><td class="num">${fmtMoney(now[p.key], 'SEK')}</td><td class="num">${Math.round((now[p.key] / total) * 100)}%</td><td class="num">${fmtNum(ore(now[p.key]), 1)}</td><td>${p.negotiable === 'yes' ? '<span class="ok">Yes</span>' : 'No'}</td><td class="subtle">${esc(p.how)}</td></tr>`).join('')}</tbody>
     </table></div>
     <p><strong>The grid (E.ON Elnät): no rebate to negotiate.</strong> The grid is a monopoly and its tariffs are regulated by Energimarknadsinspektionen; E.ON must charge every customer on the same tariff the same way, so a discount on the nätavgift is not possible. What the club controls is the monthly peak (${Math.round((now.effekt / total) * 100)}% of the bill), and whether the tariff and fuse size still fit, which is worth checking with E.ON Elnät if the peaks fall a lot.</p>
-    <p><strong>The electricity contract: worth comparing.</strong> It is the largest part, ${Math.round((now.retail / total) * 100)}% of the bill, and averaged <strong>${fmtNum(retailOre, 1)} öre/kWh</strong> (${fmtNum(retailOreBefore, 1)} öre the year before). That covers the quarter-hour spot price plus E.ON’s surcharge, fees and certificates, and it follows the market, so it cannot be compared with a fixed price directly. What can be compared is the <strong>surcharge and the fixed fees</strong> on a spot-price contract.${split} Ask E.ON what they are on the current P15M contract, then get offers from a few other retailers for the same kind of contract. Every öre counts across the year: ${sensitivity.join(' · ')}.</p>
+    <p><strong>The electricity contract: worth comparing.</strong> It is the largest part, ${Math.round((now.retail / total) * 100)}% of the bill, and averaged <strong>${fmtNum(retailOre, 1)} öre/kWh</strong> (${fmtNum(retailOreBefore, 1)} öre the year before). That covers the quarter-hour spot price plus E.ON’s surcharge, fees and certificates, and it follows the market, so it cannot be compared with a fixed price directly. What can be compared is the <strong>surcharge and the fixed fees</strong> on a spot-price contract.${split} The contract itself is already at E.ON’s floor: <strong>${fmtNum(RETAIL_CONTRACT.surchargeOre, 0)} öre/kWh surcharge and no annual fee</strong>, the lowest E.ON offers.${spotOre !== null ? ` So about ${fmtNum(Math.max(0, retailOre - spotOre - RETAIL_CONTRACT.surchargeOre), 1)} öre/kWh of the above is other per-kWh items on the bill (certificates and E.ON’s variable costs): ask E.ON to itemise them, and compare offers on the total above spot, not just the surcharge.` : ''} Other retailers can still be asked for the same kind of contract (quarter-hour spot). Every öre counts across the year: ${sensitivity.join(' · ')}.</p>
     <p class="subtle">A fixed price only pays if the market rises; with a spot price the club also benefits from the cheap hours, especially with a battery or solar later. The quarter-hour price means each 15 minutes is priced separately, so moving flexible loads (golf carts, the irrigation start) to cheap quarters also helps a little.</p>
     ${grid2027Html(now, spotOre)}`;
 }
@@ -2519,9 +2657,219 @@ function bindInstallerDownloads(data, buildings) {
   });
 }
 
+// ---- glare on the course (tools/roof-solar/glare.mjs → data/solar-site.json) ----
+// The high season (June–August, the most green-fee guests) counts three times,
+// the rest of the season once, the winter not at all. Same steps as the 3D
+// model's dots (solar3d.js GLARE_STEPS).
+const GLARE_WEIGHTS = [3, 1, 0];
+const GLARE_LEGEND = [
+  { min: 0, color: '#f9c784', label: 'under 30' },
+  { min: 30, color: '#f08c3a', label: '30–120' },
+  { min: 120, color: '#c8501a', label: '120–360' },
+  { min: 360, color: '#7f2a0c', label: '360+ min' },
+];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const holeName = (way) => HOLE_NAMES[way] || `the hole at OSM way ${way}`;
+
+// presence: golfers on the course per month and hour, 0–1 (now.js
+// presenceByMonthHour); glare when nobody is out there counts for nothing.
+// `present` is the high-season hours weighted by it: an hour at the busiest
+// time of the year counts fully, an hour at dawn about nothing.
+function glareSummary(run, presence = null) {
+  const F = Object.fromEntries(run.point_fields.map((k, i) => [k, i]));
+  const [high, season, off] = run.minutes_in_view_by_period.map((m) => m / 60);
+  const weighted = high * GLARE_WEIGHTS[0] + season * GLARE_WEIGHTS[1] + off * GLARE_WEIGHTS[2];
+  const withGolfers = (months) => (presence ? run.by_month_hour_in_view.reduce((s, row, m) => s + (months.includes(m) ? row.reduce((a, min, h) => a + (min * presence[m][h]) / 60, 0) : 0), 0) : null);
+  const present = withGolfers([5, 6, 7]);
+  const presentSeason = withGolfers([2, 3, 4, 8, 9]);
+  const byHole = new Map();
+  for (const p of run.points) {
+    const k = p[F.hole_way];
+    const h = byHole.get(k) || { pts: 0, high: 0, on: new Map() };
+    h.pts += 1;
+    h.high += p[F.in_view][0];
+    h.on.set(p[F.on], (h.on.get(p[F.on]) || 0) + 1);
+    byHole.set(k, h);
+  }
+  const where = [...byHole.entries()].sort((a, b) => b[1].high - a[1].high || b[1].pts - a[1].pts).slice(0, 3)
+    .map(([way, h]) => `${holeName(way)}: ${[...h.on.entries()].sort((a, b) => b[1] - a[1]).map(([on]) => on).slice(0, 2).join(', ')}`);
+  const months = MONTHS.filter((_, m) => run.by_month_hour_in_view[m].some((x) => x > 0));
+  const hours = Array.from({ length: 24 }, (_, h) => h).filter((h) => run.by_month_hour_in_view.some((row) => row[h] > 0));
+  const when = hours.length ? `${months[0]}–${months.at(-1)}, ${String(hours[0]).padStart(2, '0')}:00–${String(hours.at(-1) + 1).padStart(2, '0')}:00` : '–';
+  return { high, season, off, weighted, present, presentSeason, where, when, central: run.points.filter((p) => p[F.central] > 0).length };
+}
+
+function glareHeatmap(run) {
+  const hours = Array.from({ length: 17 }, (_, i) => i + 5); // 05–21
+  const max = Math.max(1, ...run.by_month_hour_in_view.flat());
+  const cell = (m) => {
+    if (!m) return '';
+    const step = m >= 60 ? 3 : m >= 20 ? 2 : m >= 5 ? 1 : 0;
+    return `background:${GLARE_LEGEND[step].color}`;
+  };
+  return `<div class="table-wrap"><table class="glare-heat">
+    <thead><tr><th>Month</th>${hours.map((h) => `<th class="num">${String(h).padStart(2, '0')}</th>`).join('')}<th class="num">Hours</th></tr></thead>
+    <tbody>${run.by_month_hour_in_view.map((row, m) => {
+      const high = m >= 5 && m <= 7;
+      const tot = row.reduce((a, x) => a + x, 0);
+      return `<tr class="${high ? 'glare-high' : ''}"><td>${high ? '<strong>' : ''}${MONTHS[m]}${high ? '</strong> <span class="subtle">high season</span>' : ''}</td>${hours.map((h) => `<td style="${cell(row[h])}" title="${MONTHS[m]} ${String(h).padStart(2, '0')}:00–${String(h + 1).padStart(2, '0')}:00: ${row[h]} min a year with glare in some golfer’s view"></td>`).join('')}<td class="num">${tot ? fmtNum(tot / 60, 1) : ''}</td></tr>`;
+    }).join('')}</tbody>
+  </table></div>
+  <div class="series-legend"><span class="subtle">Minutes a year in that clock hour (Swedish time), at any place on the course:</span>
+    ${['1–5', '5–20', '20–60', '60+'].map((l, i) => `<span><i class="swatch" style="background:${GLARE_LEGEND[i].color}"></i>${l}</span>`).join('')}
+    <span class="subtle">(max ${max} min)</span></div>`;
+}
+
+function solarGlareHtml(site, selected, presence = null) {
+  const runs = site.glare.map((run) => ({ run, s: glareSummary(run, presence) }));
+  const sel = runs.find((r) => r.run.key === selected) || runs[0];
+  // With the charging sessions, judge by the glare while golfers are out: an
+  // hour of glare at dawn, when nobody plays, does not count.
+  const score = (r) => (presence ? r.s.present : r.s.high);
+  const limit = presence ? 2 : 5;
+  const bad = runs.filter((r) => score(r) >= limit).sort((a, b) => score(b) - score(a));
+  const fine = runs.filter((r) => score(r) < limit);
+  return `<div class="card">
+    <div class="card-head"><h3>Glare: will the panels dazzle golfers?</h3><span class="subtle">the sun’s reflection in the panels, traced for every 5 minutes of ${esc(sel.run.settings.year)} to eye height (1.6 m) where golfers walk, looking along the line of play</span></div>
+    ${bad.length ? `<div class="notice warn"><h3>In the high season: ${bad.map((r) => `${esc(r.run.label)} ${fmtNum(r.s.high, 0)} h`).join(', ')}</h3>
+      ${bad.map((r) => `<strong>${esc(r.run.label)}</strong>: ${fmtNum(r.s.high, 0)} h a year in June–August${presence ? `, ${fmtNum(r.s.present, 1)} h of it with golfers out there` : ""} (${fmtNum(r.s.season, 0)} h in the rest of the season) at ${r.run.points.length} places, ${r.s.central} of them straight in the eyes; ${esc(r.s.where.join('; '))}; ${esc(r.s.when)}.`).join('<br>')}
+      <br>For the green-fee guests these are the ones to take seriously: leave those roof faces without panels, or use anti-glare (matt, textured) glass there and ask the installer for its reflectance.</div>` : ''}
+    ${fine.length ? `<div class="notice"><h3>Little or none in the high season: ${fine.map((r) => esc(r.run.label)).join(', ')}</h3>
+      ${presence ? `Under ${limit} hours a year in June–August each, counting only when golfers are out (from the times cars are plugged in at the club’s chargers).` : `Under ${limit} hours a year in June–August each.`} ${fine.map((r) => `${esc(r.run.label)}: ${fmtNum(r.s.high, 1)} h${presence ? ` (${fmtNum(r.s.present, 1)} h with golfers there)` : ''}, ${fmtNum(r.s.season, 1)} h in the rest of the season`).join('; ')}. The camping’s roofs sit in the forest, which hides most of their reflection from the course.</div>` : ''}
+    <div class="table-wrap"><table>
+      <thead><tr><th>Panels</th><th class="num">High season (Jun–Aug), h</th><th class="num">Rest of the season, h</th><th class="num">Winter, h</th>${presence ? '<th class="num" title="High-season hours weighted by how many golfers are usually out at that month and hour (the busiest hour of the year = 1)">With golfers there (Jun–Aug), h</th>' : '<th class="num">Weighted, h</th>'}<th class="num">Places (straight in the eyes)</th><th>Where</th><th>When</th></tr></thead>
+      <tbody>${runs.map(({ run, s }) => `<tr><td>${run.key === sel.run.key ? '<strong>' : ''}${esc(run.label)}${run.key === sel.run.key ? '</strong>' : ''}</td><td class="num"><strong>${fmtNum(s.high, 1)}</strong></td><td class="num">${fmtNum(s.season, 1)}</td><td class="num">${fmtNum(s.off, 1)}</td><td class="num">${presence ? `<strong>${fmtNum(s.present, 1)}</strong>` : fmtNum(s.weighted, 0)}</td><td class="num">${run.points.length} (${s.central})</td><td class="subtle">${esc(s.where.join('; ') || '–')}</td><td class="subtle">${esc(s.when)}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <h4>When it happens: ${esc(sel.run.label)}</h4>
+    <div id="solar-glare-heat">${glareHeatmap(sel.run)}</div>
+    <details><summary>How this is worked out, and what it leaves out</summary>
+      <p class="subtle">Where golfers walk: a 4 m grid within 40 m of each hole line from OpenStreetMap, without forest, water and buildings (tools/roof-solar/walkzone.mjs); on the tee, fairway and green or within 15 m of the line counts as “likely”, the rough further out as “possible”. Each place looks along its line of play: at the pin, at the next target 150 m ahead on the hole line, and in the walking direction; the nearest of them to the glare counts. Glare (tools/roof-solar/glare.mjs): the sun’s direction is mirrored in each panel; where the reflected ray reaches a place’s eye, the angle to that view decides how bad it is: within 10° straight in the eyes, within 25° in the field of view (counted here), within 50° peripheral (not counted). Weighted hours: high season ×${GLARE_WEIGHTS[0]}, rest of the season (1 Mar – 25 Oct) ×${GLARE_WEIGHTS[1]}, winter ×${GLARE_WEIGHTS[2]}. Close to a worst case: flat ground, a clear sky every day; the forest areas from OpenStreetMap block the reflection as a 15 m canopy, but single trees, gaps and buildings are not modelled; the brightness is not modelled (any panel glass reflects a few per cent of the sun, which is still dazzling, if brief). Run it again for another roof, hole or layout with the commands in tools/roof-solar/README.md.</p>
+    </details>
+  </div>`;
+}
+
+function bindGlareControls(s) {
+  const run = () => s.site.glare.find((g) => g.key === s.glare) || null;
+  s.view.setGlare(run(), GLARE_WEIGHTS);
+  // ?frame=site or ?frame=E,N opens the model there (for links and screenshots).
+  const start = new URLSearchParams(location.search).get('frame');
+  if (start) s.view.frame(start.includes(',') ? { e: Number(start.split(',')[0]), n: Number(start.split(',')[1]) } : start);
+  $('#solar-glare')?.addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-glare]');
+    if (!chip) return;
+    s.glare = chip.dataset.glare || null;
+    for (const c of $$('#solar-glare .chip')) c.classList.toggle('active', c === chip);
+    const r = run();
+    s.view.setGlare(r, GLARE_WEIGHTS);
+    if (r && $('#solar-glare-heat')) $('#solar-glare-heat').innerHTML = glareHeatmap(r);
+    if (r) {
+      const F = Object.fromEntries(r.point_fields.map((k, i) => [k, i]));
+      const pts = r.points;
+      if (pts.length) s.view.frame({ e: pts.reduce((a, p) => a + p[F.e], 0) / pts.length, n: pts.reduce((a, p) => a + p[F.n], 0) / pts.length });
+    }
+  });
+  $('#solar-frame')?.addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-frame]');
+    if (!chip) return;
+    const f = chip.dataset.frame;
+    const scout = s.data.buildings.find((b) => b.key === 'scout');
+    s.view.frame(f === 'camping' && scout ? { e: scout.e + 20, n: scout.n + 30 } : f === 'camping' ? 'site' : f);
+  });
+}
+
+// ---- what to buy, step by step (SOLAR_STEPS) ----------------------------------
+// The roofs shown in the 3D model for a choice, and the ones the camera goes to:
+// the roofs a step adds to the step before.
+function solarSelection(show, buildings) {
+  const have = new Set(buildings.map((b) => b.key));
+  if (show === 'all') {
+    // All panels shown, but the camera stays close on the clubhouse buildings:
+    // the camping is 800 m away and has its own buttons.
+    const home = buildings.filter((b) => Math.hypot(b.e - buildings[0].e, b.n - buildings[0].n) < 200);
+    return { keys: have, focus: new Set(home.map((b) => b.key)) };
+  }
+  const i = Math.max(0, SOLAR_STEPS.findIndex((st) => st.key === show));
+  const keys = new Set(SOLAR_STEPS[i].keys.filter((k) => have.has(k)));
+  const before = new Set(i ? SOLAR_STEPS[i - 1].keys : []);
+  return { keys, focus: new Set([...keys].filter((k) => !before.has(k))) };
+}
+
+function solarStepsHtml(effekt, noWest, site, presence = null) {
+  const find = (res, keys) => res?.results.find((r) => r.keys.length === keys.length && keys.every((k) => r.keys.includes(k)));
+  const glareOf = (keys) => (site?.glare || []).filter((g) => keys.includes(g.key));
+  const cost = SOLAR_SIMULATION.costPerKwp;
+  let prev = null;
+  let prevNo = null;
+  const rows = SOLAR_STEPS.map((st) => {
+    const r = find(effekt, st.keys);
+    const n = find(noWest, st.keys);
+    if (!r) return '';
+    const total = r.effektKr + r.energyKr;
+    const add = { kwp: r.kwp - (prev?.kwp || 0), kr: total - (prev ? prev.effektKr + prev.energyKr : 0) };
+    const nTotal = n ? n.effektKr + n.energyKr : null;
+    const nAdd = n ? nTotal - (prevNo ? prevNo.effektKr + prevNo.energyKr : 0) : null;
+    const nKwp = n ? n.kwp - (prevNo?.kwp || 0) : null;
+    prev = r;
+    prevNo = n;
+    const g = glareOf(st.glare);
+    const glareHigh = g.map((x) => { const gs = glareSummary(x, presence); return `${esc(x.label)} ${fmtNum(gs.high, 0)} h${presence ? ` (${fmtNum(gs.present, 1)} h with golfers there)` : ""}`; }).join(", ");
+    const pay = (kwp, kr) => cost.map((c) => fmtNum((c * kwp) / kr, 1)).join(' / ');
+    return `<tr>
+      <td style="white-space:nowrap"><strong>${esc(st.label)}</strong></td>
+      <td class="num">+${fmtNum(add.kwp, 1)} kWp<br><span class="subtle">${fmtNum(r.kwp, 1)} in all</span></td>
+      <td class="num"><strong>+${fmtMoney(add.kr, 'SEK')}</strong><br><span class="subtle">${fmtNum(add.kr / add.kwp, 0)} kr per kWp · ${Math.round(r.onSite * 100)} % used on site</span></td>
+      <td class="num">${pay(add.kwp, add.kr)} yrs</td>
+      <td class="num">${n ? `+${fmtNum(nKwp, 1)} kWp, +${fmtMoney(nAdd, 'SEK')}<br><span class="subtle">${pay(nKwp, nAdd)} yrs</span>` : '–'}</td>
+      <td class="subtle">${glareHigh || '–'}</td>
+      <td class="subtle"><strong>First:</strong> ${esc(st.before)}<br><strong>Why it may wait:</strong> ${esc(st.weaker)}</td>
+    </tr>`;
+  }).join('');
+  const s1 = find(noWest, SOLAR_STEPS[0].keys);
+  const k1 = find(noWest, ['kansli']);
+  return `<div class="card">
+    <div class="card-head"><h3>What to buy, step by step</h3><span class="subtle">each step adds roofs to the one before; the buttons above the 3D model show each step’s roofs</span></div>
+    ${s1 ? `<div class="notice"><h3>Without the west roof (or the studio), is it still worth it?</h3>Yes. The office building’s south and east roofs alone are ${fmtNum(k1.kwp, 1)} kWp: about <strong>${fmtMoney(k1.effektKr + k1.energyKr, 'SEK')} a year</strong>, payback ${cost.map((c) => fmtNum((c * k1.kwp) / (k1.effektKr + k1.energyKr), 1)).join(' / ')} years. With the studio, still without the west roof: ${fmtNum(s1.kwp, 1)} kWp, ${fmtMoney(s1.effektKr + s1.energyKr, 'SEK')} a year. A small system costs more per kWp (the fixed part of the job), so count on the upper price for the office alone.</div>` : ''}
+    <div class="table-wrap"><table>
+      <thead><tr><th>Step</th><th class="num">Adds</th><th class="num">Saved a year (what the step adds)</th><th class="num">Payback (${cost.map((c) => `${c / 1000}k`).join(' / ')} kr/kWp)</th><th class="num">Without the office’s west roof</th><th>Glare in golfers’ view, high season</th><th>Before, and why it may wait</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <p class="subtle">Saved a year: simulated per quarter hour on the club’s measured consumption (as the cards below); a later step is worth what it adds on top of the steps before, which falls as more is exported at the spot price. Glare: hours a year in June–August when the roofs the step adds reflect the sun into a golfer’s view (the card above), with the forest around the course blocking what it hides.</p>
+  </div>`;
+}
+
+// ---- the feeder cables and the losses in them -------------------------------
+// Loss in a three-phase cable: 3·I²·R with I = P / (√3 · 400 V) (an inverter
+// runs at cos φ ≈ 1); R per conductor from the energy analysis (aluminium).
+const cableLossW = (kw, ohm) => 3 * ((kw * 1000) / (Math.sqrt(3) * 400)) ** 2 * ohm;
+
+function feedersHtml() {
+  const camping = FEEDERS.links.find((l) => l.key === 'camping');
+  const club = FEEDERS.links.find((l) => l.key === 'clubhouse');
+  const sizes = [5, 10, 20, 30];
+  return `<div class="card">
+    <div class="card-head"><h3>The cables between the buildings</h3><span class="subtle">from the ground cabinet at the water treatment plant, where the club’s one E.ON meter is</span></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Feeder</th><th>Cable</th><th>Conductor</th><th class="num">Current (buried)</th><th class="num">≈ Power, 400 V 3-phase</th><th class="num">Length</th></tr></thead>
+      <tbody>${FEEDERS.links.map((l) => `<tr><td>${esc(l.label)}</td><td class="mono">${esc(l.cable)}</td><td>${esc(l.material)}</td><td class="num">${esc(l.amps)}</td><td class="num">${esc(l.kw)}</td><td class="num">${l.lengthM ? `~${l.lengthM} m` : ''}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <ul>${FEEDERS.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>
+    <h4>Solar at the camping: the scout cabin and the cabins</h4>
+    <p>Panels there feed the camping’s own board first (the laundry, the pitches, the cabins’ heating); only what the camping does not use at that moment travels the ~${camping.lengthM} m back to the ground cabinet and on to the clubhouse, losing a little on the way. The camping feeder is thick (${esc(camping.cable)}, about ${fmtNum(camping.ohm, 2)} Ω per conductor), so the loss is small; the office building’s ${esc(club.cable)} over ${club.lengthM} m loses a fifth of that.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th class="num">Solar power sent through the cable</th>${sizes.map((kw) => `<th class="num">${kw} kW</th>`).join('')}</tr></thead>
+      <tbody>
+        <tr><td>Camping → ground cabinet (${camping.lengthM} m)</td>${sizes.map((kw) => `<td class="num">${fmtNum(cableLossW(kw, camping.ohm), 0)} W (${fmtNum((cableLossW(kw, camping.ohm) / (kw * 10)), 1)} %)</td>`).join('')}</tr>
+        <tr><td>Ground cabinet → office building (${club.lengthM} m)</td>${sizes.map((kw) => `<td class="num">${fmtNum(cableLossW(kw, club.ohm), 0)} W (${fmtNum((cableLossW(kw, club.ohm) / (kw * 10)), 1)} %)</td>`).join('')}</tr>
+      </tbody>
+    </table></div>
+    <p class="subtle">At full output; over a year the loss is roughly half of that percentage, since panels mostly run well below their peak (the loss grows with the square of the power). A camping plant’s surplus goes camping → ground cabinet → clubhouse, so both rows apply to it; panels on the office building are used right there by the restaurant and the clubhouse, so almost none of their output travels a feeder at all. The cabins’ distance to the camping board is not in the analysis: a long thin cable from a cabin to the board would matter more than the thick feeder. Cables, lengths and materials: ${esc(FEEDERS.source)}; to be verified by the electrician.</p>
+  </div>`;
+}
+
 async function renderSolar() {
   const root = $('#view-solar');
-  state.solar ||= { show: 'suggested', data: null, view: null, sunDay: 'summer', sunHour: 13 };
+  // ?roofs=step2 or ?roofs=all opens the 3D model on that choice (for links).
+  state.solar ||= { show: new URLSearchParams(location.search).get('roofs') || 'step1', data: null, view: null, sunDay: 'summer', sunHour: 13 };
   const s = state.solar;
   if (!s.data) {
     root.innerHTML = '<div class="loading">Loading the roof model...</div>';
@@ -2537,6 +2885,19 @@ async function renderSolar() {
   if (s.effekt === undefined) {
     // The per-roof simulation (tools/roof-solar → data/solar-effekt.json); optional.
     s.effekt = await fetch('data/solar-effekt.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  }
+  if (s.presence === undefined) {
+    // When golfers are out (the charging sessions), to weight the glare; optional.
+    s.presence = await loadMeterInputs().then((x) => presenceByMonthHour(x.records)).catch(() => null);
+  }
+  if (s.noWest === undefined) {
+    // The same simulation without the office's west roof (simulate.mjs --exclude kansli:W); optional.
+    s.noWest = await fetch('data/solar-effekt-nowest.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  }
+  if (s.site === undefined) {
+    // The golf course (OpenStreetMap) and the glare runs (tools/roof-solar/site-layers.mjs); optional.
+    s.site = await fetch('data/solar-site.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    s.glare ??= s.site?.glare?.[0]?.key || null;
   }
   const buildings = s.data.buildings.filter((b) => !b.error);
   const pick = (keys) => buildings.filter((b) => keys.includes(b.key));
@@ -2571,7 +2932,7 @@ async function renderSolar() {
     <div class="card">
       <div class="card-head"><h3>The roofs and the panels that fit</h3><span class="spacer"></span>
         <span class="filters" id="solar-show">
-          <button class="chip ${s.show === 'suggested' ? 'active' : ''}" data-show="suggested">Suggested: office + studio</button>
+          ${SOLAR_STEPS.map((st) => `<button class="chip ${s.show === st.key ? 'active' : ''}" data-show="${st.key}">${esc(st.label)}</button>`).join('')}
           <button class="chip ${s.show === 'all' ? 'active' : ''}" data-show="all">All roofs</button>
         </span>
       </div>
@@ -2593,7 +2954,24 @@ async function renderSolar() {
         <button id="solar-sun-play" title="Run through the day">▶ Day</button>
         <span id="solar-sun-readout" class="subtle"></span>
       </div>
+      ${s.site ? `<div class="filters solar-sun" id="solar-frame">
+        <span class="subtle">View:</span>
+        <button class="chip" data-frame="buildings">The buildings</button>
+        <button class="chip" data-frame="site">The whole course</button>
+        <button class="chip" data-frame="camping">The camping</button>
+      </div>
+      <div class="filters solar-sun" id="solar-glare">
+        <span class="subtle">Glare in golfers’ view:</span>
+        <button class="chip ${!s.glare ? 'active' : ''}" data-glare="">Off</button>
+        ${s.site.glare.map((g) => `<button class="chip ${s.glare === g.key ? 'active' : ''}" data-glare="${esc(g.key)}">${esc(g.label)}</button>`).join('')}
+      </div>
+      <div class="series-legend">
+        <span class="subtle">Dots: places where the reflection comes within 25° of a golfer’s view along the line of play, weighted minutes a year (high season ×${GLARE_WEIGHTS[0]}, rest of the season ×${GLARE_WEIGHTS[1]}):</span>
+        ${GLARE_LEGEND.map((g) => `<span><i class="swatch" style="background:${g.color}"></i>${esc(g.label)}</span>`).join('')}
+        <span class="subtle">Dashed white: the hole lines. ${esc(s.site.attribution)}.</span>
+      </div>` : ''}
     </div>
+    ${s.site?.glare?.length ? solarGlareHtml(s.site, s.glare, s.presence) : ''}
     <div class="card">
       <div class="card-head"><h3>Per building</h3><span class="subtle">${fmtNum(s.data.panel.wp, 0)} Wp panels, ${fmtNum(s.data.panel.w, 2)} × ${fmtNum(s.data.panel.h, 2)} m, ${fmtNum(s.data.panel.setback_m, 1)} m from the roof edges</span></div>
       <div class="table-wrap"><table>
@@ -2610,7 +2988,9 @@ async function renderSolar() {
       </table></div>
     </div>
     ${s.effekt ? solarEffektHtml(s.effekt, buildings, valueOf) : ''}
+    ${s.effekt ? solarStepsHtml(s.effekt, s.noWest, s.site, s.presence) : ''}
     ${roofWorkHtml(buildings, valueOf)}
+    ${feedersHtml()}
     <div class="card">
       <div class="card-head"><h3>What size pays best</h3><span class="subtle">simulated on the club’s measured consumption, ${esc(SOLAR_SIMULATION.period)}</span></div>
       <div class="table-wrap"><table>
@@ -2641,13 +3021,23 @@ async function renderSolar() {
     if (!chip) return;
     s.show = chip.dataset.show;
     for (const c of $$('#solar-show .chip')) c.classList.toggle('active', c === chip);
-    s.view?.select(new Set(s.show === 'all' ? buildings.map((b) => b.key) : SUGGESTED_ROOFS));
+    const sel = solarSelection(s.show, buildings);
+    s.view?.select(sel.keys, sel.focus);
   });
   try {
     const { mountSolar3d } = await import('./solar3d.js');
     s.view?.dispose();
-    s.view = mountSolar3d($('#solar-3d'), s.data, new Set(s.show === 'all' ? buildings.map((b) => b.key) : SUGGESTED_ROOFS));
+    const site = s.site && {
+      ...s.site,
+      holeLabels: s.site.golf.lines.filter((l) => l.k === 'hole' && HOLE_NAMES[l.way]).map((l) => {
+        const [e, n] = l.pts[Math.floor(l.pts.length / 2)];
+        return { label: HOLE_NAMES[l.way], e, n };
+      }),
+    };
+    const sel = solarSelection(s.show, buildings);
+    s.view = mountSolar3d($('#solar-3d'), s.data, sel.keys, site, sel.focus);
     bindSunControls(s);
+    if (site) bindGlareControls(s);
   } catch (err) {
     $('#solar-3d').innerHTML = `<div class="notice warn">The 3D model could not load (${esc(err.message)}). It needs an internet connection for three.js; the tables above have the same numbers.</div>`;
   }

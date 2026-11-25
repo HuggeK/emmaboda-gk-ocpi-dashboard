@@ -131,6 +131,72 @@ export const FEEDER_CABLE = {
   ],
 };
 
+// The feeder cables from the ground-mounted meter cabinet at the water
+// treatment plant, where the facility's single E.ON meter sits, as in the
+// club's energy analysis (v1.31, July 2026, §2: the single-line diagram by
+// Emmaboda Elteknik, 2021-04-15). Currents are guide values for buried
+// 0.6/1 kV cable; the real limit is the fuse and the installation method.
+// Materials marked ? are to be confirmed on the cable marking by the electrician.
+export const FEEDERS = {
+  source: 'Emmaboda GK energy analysis v1.31 (July 2026), §2 and §11; single-line diagram, Emmaboda Elteknik 2021-04-15',
+  mainFuseA: 125,
+  links: [
+    { key: 'incoming', label: 'Incoming feed (metered: Trafo-SD 630 / SEKI OB 400)', cable: 'N1XV 4×240', material: 'Al? (Cu: ~400 A)', amps: '~290 A', kw: '~200–277 kW' },
+    { key: 'clubhouse', label: 'Clubhouse distribution (office building, studio, restaurant)', cable: '4G240', material: 'Al?', amps: '~250 A (cable ~300 A)', kw: '~175–210 kW', lengthM: 160, ohm: 0.02 },
+    { key: 'camping', label: 'Central Camping (scout cabin, cabins, pitches, laundry)', cable: 'N1XV 4×240', material: 'Al?', amps: '~290 A (fused lower)', kw: '~200 kW', lengthM: 800, ohm: 0.1 },
+    { key: 'technical', label: 'Central Technical room (UV treatment, pumps)', cable: 'N1XV-AR 4G50', material: 'Al', amps: '~100 A (fuse)', kw: '~69 kW', lengthM: 250, ohm: 0.16 },
+    { key: 'irrigation', label: 'Irrigation', cable: 'AKKJ 3×150/41', material: 'Al', amps: '~200–250 A', kw: '~140–175 kW' },
+    { key: 'reserve', label: 'Clubhouse, reserve (marked “reserv”)', cable: 'FKKJ 3×25/16', material: 'Cu', amps: '50–63 A', kw: '~35–44 kW' },
+  ],
+  // The old office's cable from the office building: judged too weak by the
+  // electrician (it has tripped); a new aluminium cable is about to be laid (FEEDER_CABLE).
+  notes: [
+    'The bottleneck is the 125 A main fuse (~87 kW), not the cables: the incoming cable and the cabinet carry ~290–400 A.',
+    'The barn’s feed is not in the diagram (likely a sub-distribution from the clubhouse): confirm it before panels there.',
+    'The old office’s feed from the office building is too weak and has tripped: a new aluminium cable is being laid.',
+  ],
+};
+
+// The electricity contract with E.ON (elhandel) as the club has it: quarter-hour
+// spot price plus this surcharge, no annual fee; E.ON says it is the lowest
+// they offer (club's information, Nov 2026). The meter model's surchargeOre
+// (meter.js, ~8 öre) is fitted to the bills and so also holds the other
+// per-kWh items on the bill (certificates, E.ON's variable costs).
+export const RETAIL_CONTRACT = { surchargeOre: 3, annualFeeKr: 0, asOf: '2026-11' };
+
+// What to buy, in order: each step adds roofs to the ones before (cumulative
+// keys). tools/roof-solar/simulate.mjs simulates each step; the Solar tab shows
+// them as choices in the 3D model. glare: the glare runs (data/solar-site.json)
+// for the roofs the step adds. before: what has to happen first. weaker: why
+// the step pays less, or may not be worth it.
+export const SOLAR_STEPS = [
+  {
+    key: 'step1', label: '1. Office + studio', keys: ['kansli', 'studio'], glare: ['kansli-se', 'kansli-w', 'studio'],
+    before: 'The studio roof’s load capacity; the office’s distribution point checked by the electrician.',
+    weaker: 'The office’s west roof dazzles golfers on hole 9 at midday in the high season: leave it out, or use anti-glare glass there.',
+  },
+  {
+    key: 'step2', label: '2. + Old office', keys: ['kansli', 'studio', 'gamla'], glare: ['gamla'],
+    before: 'The split roof fixed (ridge beam and roof), and the new aluminium cable from the office building laid.',
+    weaker: 'The roof work comes first; its steep south roof is otherwise the best per kWp. Its glare reaches nearby holes in the high season too.',
+  },
+  {
+    key: 'step3', label: '3. + Scout cabin', keys: ['kansli', 'studio', 'gamla', 'scout'], glare: ['scout'],
+    before: 'A look at the roof on site: the laser data there is blurred by the trees around the clearing.',
+    weaker: 'Small (a few kWp) and in a forest clearing: shade in the morning and evening. Its surplus travels the 800 m camping feeder. The sheet-metal roof itself is easy to mount on.',
+  },
+  {
+    key: 'step4', label: '4. + The cabins', keys: ['kansli', 'studio', 'gamla', 'scout', 'cabin1', 'cabin2', 'cabin3'], glare: ['cabins'],
+    before: 'The tile roofs inspected (built 2010: mid-life, no new roof needed, but tiles crack when walked on); hooks through the tiles.',
+    weaker: 'By now the club uses less of what the panels make in the middle of the day, so more is exported at the spot price; mounting on tiles costs more than on sheet metal; behind the 800 m camping feeder.',
+  },
+];
+
+// Hole numbers for the OSM hole lines (golfTiles keeps the way id, not the
+// number). Hole 5: the club's website puts the scout cabin "along hole 5", and
+// this is the hole line passing it.
+export const HOLE_NAMES = { 910875400: 'Hole 9', 910875396: 'Hole 5' };
+
 // Each part, whether it can be negotiated, and how the club can lower it.
 export const BILL_PARTS = [
   { key: 'retail', label: 'Electricity contract (elhandel)', negotiable: 'yes', how: 'A free market: compare the surcharge (påslag) and fees on a spot-price contract with other retailers, or renegotiate with E.ON.' },

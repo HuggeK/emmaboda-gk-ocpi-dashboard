@@ -507,7 +507,7 @@ export function mountSolar3d(container, data, selected, site = null, focus = nul
     if (n) target.divideScalar(n);
     const far = Math.max(...[...groups.entries()].filter(([k]) => (look || keys).has(k)).map(([, g]) => g.userData.centre.distanceTo(target)), 0);
     controls.target.copy(target);
-    camera.position.copy(target).add(new THREE.Vector3(60, 95, 150).multiplyScalar(Math.max(1, far / 60))); // from the south-east, high, with the sun paths in view
+    camera.position.copy(target).add(new THREE.Vector3(42, 66, 105).multiplyScalar(Math.max(1, far / 45))); // from the south-east, high: close on the roofs, the sun paths at the edges
     controls.update();
   }
 

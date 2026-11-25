@@ -17,6 +17,7 @@ import {
 import { DEFAULT_TARIFF, expandSeries, hourPrices, hourlySpot, meterHours, splitHours, dailyPeaks, monthlyMeter, summarize, seasonalPicture, rateFromMeter, monthlyTopHours, typicalDay } from './meter.js';
 import { FACILITY_LOADS, BASE_LOAD_KW, explainPeak, inHours, loadLabel } from './facility.js';
 import { DEFAULT_COSTS, MARKET_BAND, account, limitSavings, priceAdvice, winterCeilingCheck, nightOffCheck } from './economics.js';
+import { cheapestWindow, krPerKwAt, monthPeakSoFar, presenceByMonthHour, priceBands, quarterPrices, swedishParts, typicalLoadByHour } from './now.js';
 import { BILL, BILL_PARTS, BILL_SOURCE, FEEDERS, FEEDER_CABLE, GRID_2027, HOLE_NAMES, RETAIL_CONTRACT, ROOF_WORK, SOLAR_SIMULATION, SOLAR_STEPS, billTotal } from './contracts.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -217,7 +218,7 @@ function referenceTime() {
 }
 
 // -------------------------------------------------------------------- router
-const views = { overview: renderOverview, live: renderLive, records: renderRecords, analysis: renderAnalysis, meter: renderMeter, economics: renderEconomics, solar: renderSolar, chargers: renderChargers, connection: renderConnection, guide: renderGuide };
+const views = { overview: renderOverview, now: renderNow, live: renderLive, records: renderRecords, analysis: renderAnalysis, meter: renderMeter, economics: renderEconomics, solar: renderSolar, chargers: renderChargers, connection: renderConnection, guide: renderGuide };
 
 // Live, Records and the charging points share the Chargers tab, with sub-tabs.
 const CHARGING_TABS = ['live', 'records', 'chargers'];
@@ -241,6 +242,126 @@ function route() {
   views[tab]();
 }
 window.addEventListener('hashchange', route);
+
+// ---------------------------------------------------- Elpris nu (for the staff)
+// In Swedish: for the staff on site. What a kWh costs per quarter hour from
+// now on, when it is cheap, this month's peak so far (the effektavgift's
+// ceiling not to go above) and the room under it hour by hour.
+const svNum = (v, d = 0) => (v === null || v === undefined || Number.isNaN(v) ? '–' : new Intl.NumberFormat('sv-SE', { minimumFractionDigits: d, maximumFractionDigits: d }).format(v));
+const svTime = (t) => new Date(t).toLocaleTimeString('sv-SE', { timeZone: 'Europe/Stockholm', hour: '2-digit', minute: '2-digit' });
+const svDay = (t) => new Date(t).toLocaleDateString('sv-SE', { timeZone: 'Europe/Stockholm', weekday: 'long', day: 'numeric', month: 'long' });
+const PRICE_LEVELS = [
+  { key: 'low', label: 'Billigt', color: '#9ec5f4' },
+  { key: 'mid', label: 'Normalt', color: '#2a78d6' },
+  { key: 'high', label: 'Dyrt', color: '#0d2a52' },
+];
+
+function priceChartSvg(quarters, bands, now) {
+  const W = 960;
+  const H = 200;
+  const pad = { l: 44, r: 8, t: 10, b: 26 };
+  const max = Math.max(...quarters.map((q) => q.totalOre)) * 1.05;
+  const min = Math.min(0, ...quarters.map((q) => q.totalOre));
+  const bw = (W - pad.l - pad.r) / quarters.length;
+  const y = (v) => pad.t + (H - pad.t - pad.b) * (1 - (v - min) / (max - min));
+  const level = (q) => (q.totalOre <= bands.low ? 0 : q.totalOre >= bands.high ? 2 : 1);
+  const bars = quarters.map((q, i) => {
+    const l = PRICE_LEVELS[level(q)];
+    return `<rect x="${(pad.l + i * bw).toFixed(1)}" y="${y(q.totalOre).toFixed(1)}" width="${Math.max(1, bw - 1).toFixed(1)}" height="${(y(min) - y(q.totalOre)).toFixed(1)}" rx="1" fill="${l.color}"><title>${svTime(q.at)}–${svTime(q.at + 15 * 60_000)}: ${svNum(q.totalOre / 100, 2)} kr/kWh (${l.label.toLowerCase()}; spot ${svNum(q.spotOre, 0)} öre)</title></rect>`;
+  }).join('');
+  const ticks = quarters.filter((q) => swedishParts(q.at).hour % 3 === 0 && new Date(q.at).getUTCMinutes() === 0).map((q) => {
+    const x = pad.l + quarters.indexOf(q) * bw;
+    const h = swedishParts(q.at).hour;
+    return `<line x1="${x}" x2="${x}" y1="${pad.t}" y2="${H - pad.b}" class="grid-line"/><text x="${x + 2}" y="${H - 8}" class="axis">${h === 0 ? new Date(q.at).toLocaleDateString('sv-SE', { timeZone: 'Europe/Stockholm', weekday: 'short' }) : `${String(h).padStart(2, '0')}`}</text>`;
+  }).join('');
+  const yt = [0, 0.5, 1, 1.5, 2, 3, 4, 5].filter((v) => v * 100 <= max).map((v) => `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(v * 100)}" y2="${y(v * 100)}" class="grid-line"/><text x="${pad.l - 6}" y="${y(v * 100) + 4}" text-anchor="end" class="axis">${svNum(v, v % 1 ? 1 : 0)}</text>`).join('');
+  const nowX = pad.l + ((now - quarters[0].at) / (15 * 60_000)) * bw;
+  return `<svg class="price-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Elpris per kvart, kr per kWh">
+    ${yt}${ticks}${bars}
+    <line x1="${nowX}" x2="${nowX}" y1="${pad.t}" y2="${H - pad.b}" class="now-line"/><text x="${nowX + 3}" y="${pad.t + 10}" class="axis now-label">nu</text>
+  </svg>`;
+}
+
+async function renderNow() {
+  const root = $('#view-now');
+  root.innerHTML = '<div class="loading">Hämtar priser och mätvärden...</div>';
+  let inputs;
+  try {
+    inputs = await loadMeterInputs();
+  } catch (err) {
+    root.innerHTML = `<div class="notice error"><h3>Inga data</h3>${esc(err.message)}</div>`;
+    return;
+  }
+  const { eon } = inputs;
+  const now = Date.now();
+  const tariff = { ...DEFAULT_TARIFF, ...(state.meter?.tariff || {}) };
+  const quarters = eon?.spot ? quarterPrices(eon.spot, now, tariff) : [];
+  const inst = (eon?.installations || []).find((i) => i.hourly || i.quarter);
+  const hours = inst ? meterHours(inst) : new Map();
+  const peak = hours.size ? monthPeakSoFar(hours, now) : null;
+  const typical = hours.size ? typicalLoadByHour(hours, now) : null;
+  const lastMeter = hours.size ? Math.max(...hours.keys()) + 3_600_000 : null;
+  const krPerKw = krPerKwAt(now);
+  if (!quarters.length) {
+    root.innerHTML = `<div class="view-head"><h2>Elpris nu</h2></div><div class="notice warn"><h3>Inga kommande priser</h3>Spotpriserna för de närmaste timmarna finns inte i datat ännu. Morgondagens priser publiceras runt kl. 13.</div>`;
+    return;
+  }
+  const bands = priceBands(quarters);
+  const levelOf = (ore) => PRICE_LEVELS[ore <= bands.low ? 0 : ore >= bands.high ? 2 : 1];
+  const cur = quarters[0];
+  const cheap3 = cheapestWindow(quarters, 3);
+  const onTop = cur.retailOre + cur.transferOre + cur.taxOre;
+  const isGrid2027 = now >= new Date(`${GRID_2027.from}T00:00:00`).getTime();
+  // Hour rows: the mean full price of the hour's quarters, the usual load then and the room under the peak.
+  const byHour = new Map();
+  for (const q of quarters) {
+    const h = Math.floor(q.at / 3_600_000) * 3_600_000;
+    const row = byHour.get(h) || { at: h, sum: 0, n: 0 };
+    row.sum += q.totalOre;
+    row.n += 1;
+    byHour.set(h, row);
+  }
+  const rows = [...byHour.values()].slice(0, 24).map((r) => {
+    const t = typical?.[swedishParts(r.at).hour];
+    const room = peak && t?.busy !== null && t?.busy !== undefined ? peak.kw - t.busy : null;
+    return { ...r, ore: r.sum / r.n, t, room };
+  });
+  const tightest = rows.filter((r) => r.room !== null).sort((a, b) => a.room - b.room)[0];
+  root.innerHTML = `
+    <div class="view-head"><h2>Elpris nu</h2><span class="subtle">För personalen: när el är billig, och hur vi undviker att höja månadens effektavgift</span></div>
+    <div class="now-tiles">
+      <div class="card tile"><div class="label">Pris just nu (${svTime(cur.at)}–${svTime(cur.at + 15 * 60_000)})</div><div class="value">${svNum(cur.totalOre / 100, 2)} kr/kWh</div><div class="hint"><i class="swatch" style="background:${levelOf(cur.totalOre).color}"></i> ${levelOf(cur.totalOre).label} · exkl. moms</div></div>
+      ${cheap3 ? `<div class="card tile"><div class="label">Billigaste 3 timmarna framåt</div><div class="value">${svTime(cheap3.start)}–${svTime(cheap3.end)}</div><div class="hint">${esc(svDay(cheap3.start))} · snitt ${svNum(cheap3.meanOre / 100, 2)} kr/kWh</div></div>` : ''}
+      ${peak ? `<div class="card tile"><div class="label">Månadens högsta timme hittills</div><div class="value">${svNum(peak.kw, 1)} kW</div><div class="hint">${esc(svDay(peak.at))} kl. ${svTime(peak.at)}: håll varje timme under detta</div></div>` : ''}
+      <div class="card tile"><div class="label">Varje kW över toppen kostar</div><div class="value">${svNum(krPerKw, 0)} kr</div><div class="hint">i effektavgift för månaden (exkl. moms)</div></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><h3>Elpris per kvart, kr/kWh exkl. moms</h3><span class="subtle">allt inräknat: spotpris + det vi betalar ovanpå</span></div>
+      ${priceChartSvg(quarters, bands, now)}
+      <div class="series-legend">${PRICE_LEVELS.map((l) => `<span><i class="swatch" style="background:${l.color}"></i>${l.label}</span>`).join('')}<span class="subtle">Billigt = billigaste tredjedelen av kvartarna som visas, dyrt = dyraste tredjedelen. Håll muspekaren över en stapel för exakt pris.</span></div>
+      <p><strong>Vad kostar en kWh ovanpå spotpriset?</strong> Just nu ${svNum(onTop, 0)} öre/kWh: E.ON:s påslag och avgifter ${svNum(cur.retailOre, 0)} öre (påslaget i avtalet är ${svNum(RETAIL_CONTRACT.surchargeOre, 0)} öre, resten är andra avgifter per kWh på fakturan), nätets energiavgift ${svNum(cur.transferOre, 1)} öre${isGrid2027 ? ` (${svNum(GRID_2027.energyOre, 1)} öre + ${svNum(GRID_2027.energySpotPct, 1)} % av spotpriset)` : ` (från 2027: ${svNum(GRID_2027.energyOre, 1)} öre + ${svNum(GRID_2027.energySpotPct, 1)} % av spotpriset)`} och energiskatt ${svNum(cur.taxOre, 0)} öre. Spotpriset just nu: ${svNum(cur.spotOre, 0)} öre. Priset sätts per kvart, så det lönar sig att flytta det som går att flytta till de billiga kvartarna.</p>
+    </div>
+    ${peak && typical ? `<div class="card">
+      <div class="card-head"><h3>Timme för timme: pris och utrymme under månadens topp</h3><span class="subtle">utrymme = månadens topp (${svNum(peak.kw, 1)} kW) minus vad anläggningen brukar dra den timmen en hög dag</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Timme</th><th class="num">Pris, kr/kWh</th><th>Nivå</th><th class="num">Brukar dra, kW</th><th class="num">En hög dag, kW</th><th class="num">Utrymme, kW</th></tr></thead>
+        <tbody>${rows.map((r) => {
+          const l = levelOf(r.ore);
+          return `<tr><td>${swedishParts(r.at).hour === 0 || r === rows[0] ? `<strong>${esc(svDay(r.at))}</strong> ` : ''}${svTime(r.at)}</td><td class="num">${svNum(r.ore / 100, 2)}</td><td><i class="swatch" style="background:${l.color}"></i> ${l.label}</td><td class="num">${svNum(r.t?.median, 1)}</td><td class="num">${svNum(r.t?.busy, 1)}</td><td class="num">${r.room === null ? '–' : r.room < 3 ? `<strong>${svNum(r.room, 1)}</strong> ⚠` : svNum(r.room, 1)}</td></tr>`;
+        }).join('')}</tbody>
+      </table></div>
+      ${tightest ? `<p class="subtle">Minst utrymme kl. ${svTime(tightest.at)} (${svNum(tightest.room, 1)} kW). ⚠ = under 3 kW kvar: starta inte tunga saker samtidigt då.</p>` : ''}
+    </div>` : ''}
+    <div class="card">
+      <h3>Så gör vi</h3>
+      <ul>
+        <li><strong>Kör det som kan vänta när det är billigt:</strong> tvättmaskiner och torktumlare på campingen, diskmaskin, golfbilsladdning, varmvattenberedare. ${cheap3 ? `Närmast: ${svTime(cheap3.start)}–${svTime(cheap3.end)} ${esc(svDay(cheap3.start))}.` : ''}</li>
+        <li><strong>Sprid ut de tunga lasterna.</strong> Effektavgiften sätts av månadens högsta timme (medeleffekten över en klocktimme). Starta inte allt samtidigt; en timme över ${peak ? `${svNum(peak.kw, 0)} kW` : 'toppen'} kostar ${svNum(krPerKw, 0)} kr per extra kW, för hela månaden.</li>
+        <li><strong>Det dyra är oftast morgon och tidig kväll</strong> på vardagar i vinterhalvåret; det billiga mitt i natten och mitt på dagen när det blåser eller är soligt. Titta här i stället för att gissa: priserna för i morgon kommer runt kl. 13.</li>
+      </ul>
+      <p class="subtle">Priserna är spotpriser för SE4 från Nord Pool per kvart${state.snapshot ? `, hämtade ${esc(fmtDateTime(state.snapshot.status.generated_at))}` : ''}, plus avtalets påslag och avgifter, nätavgift och energiskatt, exkl. moms. Månadens topp och vad anläggningen brukar dra kommer från E.ON:s mätare${lastMeter ? `, som i dag har värden till och med ${esc(svDay(lastMeter - 1))} kl. ${svTime(lastMeter)}` : ''}: E.ON skickar mätvärdena ungefär ett dygn i efterhand, så dagens egen förbrukning syns inte här än. ”Brukar dra” är medianen för samma timme de senaste fyra veckorna, ”en hög dag” den högsta tiondelen.</p>
+    </div>`;
+}
 
 // ---------------------------------------------------- connection indicator
 function paintIndicator() {
@@ -2533,10 +2654,17 @@ const GLARE_LEGEND = [
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const holeName = (way) => HOLE_NAMES[way] || `the hole at OSM way ${way}`;
 
-function glareSummary(run) {
+// presence: golfers on the course per month and hour, 0–1 (now.js
+// presenceByMonthHour); glare when nobody is out there counts for nothing.
+// `present` is the high-season hours weighted by it: an hour at the busiest
+// time of the year counts fully, an hour at dawn about nothing.
+function glareSummary(run, presence = null) {
   const F = Object.fromEntries(run.point_fields.map((k, i) => [k, i]));
   const [high, season, off] = run.minutes_in_view_by_period.map((m) => m / 60);
   const weighted = high * GLARE_WEIGHTS[0] + season * GLARE_WEIGHTS[1] + off * GLARE_WEIGHTS[2];
+  const withGolfers = (months) => (presence ? run.by_month_hour_in_view.reduce((s, row, m) => s + (months.includes(m) ? row.reduce((a, min, h) => a + (min * presence[m][h]) / 60, 0) : 0), 0) : null);
+  const present = withGolfers([5, 6, 7]);
+  const presentSeason = withGolfers([2, 3, 4, 8, 9]);
   const byHole = new Map();
   for (const p of run.points) {
     const k = p[F.hole_way];
@@ -2551,7 +2679,7 @@ function glareSummary(run) {
   const months = MONTHS.filter((_, m) => run.by_month_hour_in_view[m].some((x) => x > 0));
   const hours = Array.from({ length: 24 }, (_, h) => h).filter((h) => run.by_month_hour_in_view.some((row) => row[h] > 0));
   const when = hours.length ? `${months[0]}–${months.at(-1)}, ${String(hours[0]).padStart(2, '0')}:00–${String(hours.at(-1) + 1).padStart(2, '0')}:00` : '–';
-  return { high, season, off, weighted, where, when, central: run.points.filter((p) => p[F.central] > 0).length };
+  return { high, season, off, weighted, present, presentSeason, where, when, central: run.points.filter((p) => p[F.central] > 0).length };
 }
 
 function glareHeatmap(run) {
@@ -2575,21 +2703,25 @@ function glareHeatmap(run) {
     <span class="subtle">(max ${max} min)</span></div>`;
 }
 
-function solarGlareHtml(site, selected) {
-  const runs = site.glare.map((run) => ({ run, s: glareSummary(run) }));
+function solarGlareHtml(site, selected, presence = null) {
+  const runs = site.glare.map((run) => ({ run, s: glareSummary(run, presence) }));
   const sel = runs.find((r) => r.run.key === selected) || runs[0];
-  const bad = runs.filter((r) => r.s.high >= 5).sort((a, b) => b.s.high - a.s.high);
-  const fine = runs.filter((r) => r.s.high < 5);
+  // With the charging sessions, judge by the glare while golfers are out: an
+  // hour of glare at dawn, when nobody plays, does not count.
+  const score = (r) => (presence ? r.s.present : r.s.high);
+  const limit = presence ? 2 : 5;
+  const bad = runs.filter((r) => score(r) >= limit).sort((a, b) => score(b) - score(a));
+  const fine = runs.filter((r) => score(r) < limit);
   return `<div class="card">
     <div class="card-head"><h3>Glare: will the panels dazzle golfers?</h3><span class="subtle">the sun’s reflection in the panels, traced for every 5 minutes of ${esc(sel.run.settings.year)} to eye height (1.6 m) where golfers walk, looking along the line of play</span></div>
     ${bad.length ? `<div class="notice warn"><h3>In the high season: ${bad.map((r) => `${esc(r.run.label)} ${fmtNum(r.s.high, 0)} h`).join(', ')}</h3>
-      ${bad.map((r) => `<strong>${esc(r.run.label)}</strong>: ${fmtNum(r.s.high, 0)} h a year in June–August (${fmtNum(r.s.season, 0)} h in the rest of the season) at ${r.run.points.length} places, ${r.s.central} of them straight in the eyes; ${esc(r.s.where.join('; '))}; ${esc(r.s.when)}.`).join('<br>')}
+      ${bad.map((r) => `<strong>${esc(r.run.label)}</strong>: ${fmtNum(r.s.high, 0)} h a year in June–August${presence ? `, ${fmtNum(r.s.present, 1)} h of it with golfers out there` : ""} (${fmtNum(r.s.season, 0)} h in the rest of the season) at ${r.run.points.length} places, ${r.s.central} of them straight in the eyes; ${esc(r.s.where.join('; '))}; ${esc(r.s.when)}.`).join('<br>')}
       <br>For the green-fee guests these are the ones to take seriously: leave those roof faces without panels, or use anti-glare (matt, textured) glass there and ask the installer for its reflectance.</div>` : ''}
     ${fine.length ? `<div class="notice"><h3>Little or none in the high season: ${fine.map((r) => esc(r.run.label)).join(', ')}</h3>
-      Under 5 hours a year in June–August each. ${fine.map((r) => `${esc(r.run.label)}: ${fmtNum(r.s.high, 1)} h, ${fmtNum(r.s.season, 1)} h in the rest of the season`).join('; ')}. The camping’s roofs sit in the forest, which hides most of their reflection from the course.</div>` : ''}
+      ${presence ? `Under ${limit} hours a year in June–August each, counting only when golfers are out (from the times cars are plugged in at the club’s chargers).` : `Under ${limit} hours a year in June–August each.`} ${fine.map((r) => `${esc(r.run.label)}: ${fmtNum(r.s.high, 1)} h${presence ? ` (${fmtNum(r.s.present, 1)} h with golfers there)` : ''}, ${fmtNum(r.s.season, 1)} h in the rest of the season`).join('; ')}. The camping’s roofs sit in the forest, which hides most of their reflection from the course.</div>` : ''}
     <div class="table-wrap"><table>
-      <thead><tr><th>Panels</th><th class="num">High season (Jun–Aug), h</th><th class="num">Rest of the season, h</th><th class="num">Winter, h</th><th class="num">Weighted, h</th><th class="num">Places (straight in the eyes)</th><th>Where</th><th>When</th></tr></thead>
-      <tbody>${runs.map(({ run, s }) => `<tr><td>${run.key === sel.run.key ? '<strong>' : ''}${esc(run.label)}${run.key === sel.run.key ? '</strong>' : ''}</td><td class="num"><strong>${fmtNum(s.high, 1)}</strong></td><td class="num">${fmtNum(s.season, 1)}</td><td class="num">${fmtNum(s.off, 1)}</td><td class="num">${fmtNum(s.weighted, 0)}</td><td class="num">${run.points.length} (${s.central})</td><td class="subtle">${esc(s.where.join('; ') || '–')}</td><td class="subtle">${esc(s.when)}</td></tr>`).join('')}</tbody>
+      <thead><tr><th>Panels</th><th class="num">High season (Jun–Aug), h</th><th class="num">Rest of the season, h</th><th class="num">Winter, h</th>${presence ? '<th class="num" title="High-season hours weighted by how many golfers are usually out at that month and hour (the busiest hour of the year = 1)">With golfers there (Jun–Aug), h</th>' : '<th class="num">Weighted, h</th>'}<th class="num">Places (straight in the eyes)</th><th>Where</th><th>When</th></tr></thead>
+      <tbody>${runs.map(({ run, s }) => `<tr><td>${run.key === sel.run.key ? '<strong>' : ''}${esc(run.label)}${run.key === sel.run.key ? '</strong>' : ''}</td><td class="num"><strong>${fmtNum(s.high, 1)}</strong></td><td class="num">${fmtNum(s.season, 1)}</td><td class="num">${fmtNum(s.off, 1)}</td><td class="num">${presence ? `<strong>${fmtNum(s.present, 1)}</strong>` : fmtNum(s.weighted, 0)}</td><td class="num">${run.points.length} (${s.central})</td><td class="subtle">${esc(s.where.join('; ') || '–')}</td><td class="subtle">${esc(s.when)}</td></tr>`).join('')}</tbody>
     </table></div>
     <h4>When it happens: ${esc(sel.run.label)}</h4>
     <div id="solar-glare-heat">${glareHeatmap(sel.run)}</div>
@@ -2640,7 +2772,7 @@ function solarSelection(show, buildings) {
   return { keys, focus: new Set([...keys].filter((k) => !before.has(k))) };
 }
 
-function solarStepsHtml(effekt, noWest, site) {
+function solarStepsHtml(effekt, noWest, site, presence = null) {
   const find = (res, keys) => res?.results.find((r) => r.keys.length === keys.length && keys.every((k) => r.keys.includes(k)));
   const glareOf = (keys) => (site?.glare || []).filter((g) => keys.includes(g.key));
   const cost = SOLAR_SIMULATION.costPerKwp;
@@ -2658,7 +2790,7 @@ function solarStepsHtml(effekt, noWest, site) {
     prev = r;
     prevNo = n;
     const g = glareOf(st.glare);
-    const glareHigh = g.map((x) => `${esc(x.label)} ${fmtNum(x.minutes_in_view_by_period[0] / 60, 0)} h`).join(', ');
+    const glareHigh = g.map((x) => { const gs = glareSummary(x, presence); return `${esc(x.label)} ${fmtNum(gs.high, 0)} h${presence ? ` (${fmtNum(gs.present, 1)} h with golfers there)` : ""}`; }).join(", ");
     const pay = (kwp, kr) => cost.map((c) => fmtNum((c * kwp) / kr, 1)).join(' / ');
     return `<tr>
       <td style="white-space:nowrap"><strong>${esc(st.label)}</strong></td>
@@ -2730,6 +2862,10 @@ async function renderSolar() {
   if (s.effekt === undefined) {
     // The per-roof simulation (tools/roof-solar → data/solar-effekt.json); optional.
     s.effekt = await fetch('data/solar-effekt.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  }
+  if (s.presence === undefined) {
+    // When golfers are out (the charging sessions), to weight the glare; optional.
+    s.presence = await loadMeterInputs().then((x) => presenceByMonthHour(x.records)).catch(() => null);
   }
   if (s.noWest === undefined) {
     // The same simulation without the office's west roof (simulate.mjs --exclude kansli:W); optional.
@@ -2812,7 +2948,7 @@ async function renderSolar() {
         <span class="subtle">Dashed white: the hole lines. ${esc(s.site.attribution)}.</span>
       </div>` : ''}
     </div>
-    ${s.site?.glare?.length ? solarGlareHtml(s.site, s.glare) : ''}
+    ${s.site?.glare?.length ? solarGlareHtml(s.site, s.glare, s.presence) : ''}
     <div class="card">
       <div class="card-head"><h3>Per building</h3><span class="subtle">${fmtNum(s.data.panel.wp, 0)} Wp panels, ${fmtNum(s.data.panel.w, 2)} × ${fmtNum(s.data.panel.h, 2)} m, ${fmtNum(s.data.panel.setback_m, 1)} m from the roof edges</span></div>
       <div class="table-wrap"><table>
@@ -2829,7 +2965,7 @@ async function renderSolar() {
       </table></div>
     </div>
     ${s.effekt ? solarEffektHtml(s.effekt, buildings, valueOf) : ''}
-    ${s.effekt ? solarStepsHtml(s.effekt, s.noWest, s.site) : ''}
+    ${s.effekt ? solarStepsHtml(s.effekt, s.noWest, s.site, s.presence) : ''}
     ${roofWorkHtml(buildings, valueOf)}
     ${feedersHtml()}
     <div class="card">

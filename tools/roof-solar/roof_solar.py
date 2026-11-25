@@ -444,6 +444,35 @@ def compass(az):
     return ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][int(round(az / 45)) % 8]
 
 
+CANOPY_ABOVE_M = 1.5  # roof cells this far above the roof's 90th-percentile height are a tree over the roof
+
+
+def remove_canopy(z, mask, px):
+    """Trees hanging over a roof (the camping's cabins stand in the forest)
+    show in the laser data as cells well above the roof: left in, they become
+    steep false roof faces. Cells inside the roof more than CANOPY_ABOVE_M
+    above its 90th-percentile height take the height of the nearest roof cell
+    below that line (for the 3D model), and are left out when the roof faces
+    are fitted (the nearest face takes them afterwards). Returns the cleaned
+    heights, the canopy cells and their area (m²)."""
+    none = np.zeros_like(mask, dtype=bool)
+    vals = z[mask & np.isfinite(z)]
+    if vals.size < 20:
+        return z, none, 0.0
+    limit = np.percentile(vals, 90) + CANOPY_ABOVE_M
+    tree = mask & np.isfinite(z) & (z > limit)
+    if not tree.any():
+        return z, none, 0.0
+    # Grow by one cell: the canopy's edge pulls the cells around it up too.
+    from scipy import ndimage
+    tree = ndimage.binary_dilation(tree) & mask
+    good = mask & np.isfinite(z) & ~tree
+    _, (ri, ci) = ndimage.distance_transform_edt(~good, return_indices=True)
+    out = z.copy()
+    out[tree] = z[ri[tree], ci[tree]]
+    return out, tree, float(tree.sum() * px * px)
+
+
 def analyse(ds, b, buildings=None, ortho=None):
     z, px, origin = read_window(ds, b["e"], b["n"], WINDOW)
     seed = (int((origin[1] - b["n"]) / px), int((b["e"] - origin[0]) / px))
@@ -457,12 +486,13 @@ def analyse(ds, b, buildings=None, ortho=None):
         source = "grown from the point"
     if mask is None or mask.sum() * px * px < 10:
         return {**b, "error": "No roof found at the coordinate."}
+    z, tree, canopy_m2 = remove_canopy(z, mask, px)
     rr, cc = np.nonzero(mask)
     pad = int(3 / px)
     r0, r1, c0, c1 = max(0, rr.min() - pad), min(z.shape[0], rr.max() + pad + 1), max(0, cc.min() - pad), min(z.shape[1], cc.max() + pad + 1)
     zc, mc = z[r0:r1, c0:c1], mask[r0:r1, c0:c1]
     crop_origin = (origin[0] + c0 * px, origin[1] - r0 * px)
-    faces = faces_of(zc, px, mc, main_axis(outline[r0:r1, c0:c1]) if outline is not None else None)
+    faces = faces_of(zc, px, mc & ~tree[r0:r1, c0:c1], main_axis(outline[r0:r1, c0:c1]) if outline is not None else None)
     if outline is not None and faces:
         # The outline is exact while sparse laser points blur the edges: give
         # every cell inside the outline to its nearest roof face.
@@ -514,6 +544,8 @@ def analyse(ds, b, buildings=None, ortho=None):
     for ob in b.get("obstacles", []):
         r, c = (crop_origin[1] - ob["n"]) / px - 0.5, (ob["e"] - crop_origin[0]) / px - 0.5
         manual |= np.hypot(yy - r, xx - c) * px <= ob["r_m"] + px / 2
+    # Trees hanging over the roof (remove_canopy) shade what is under them: no panels there.
+    manual |= tree[r0:r1, c0:c1]
     out_faces = []
     for i, f in enumerate(faces):
         f["obstacles"] = obstacles(zc, px, f["mask"]) | (manual & f["mask"])
@@ -550,6 +582,7 @@ def analyse(ds, b, buildings=None, ortho=None):
         "height": int(zc.shape[0]),
         "roof_height_m": round(float(np.nanmedian(zc[mc]) - ground), 1),
         "roof_from": source,
+        **({"canopy_m2": round(canopy_m2, 1)} if canopy_m2 else {}),
         "image": png_b64(hillshade(zc, px)),
         "photo": ortho_png(ortho, crop_origin, px, zc.shape) if ortho else None,
         "faces": out_faces,

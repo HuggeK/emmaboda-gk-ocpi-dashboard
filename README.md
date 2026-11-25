@@ -430,6 +430,23 @@ check them against invoices, quotes and a site visit. To update them after
 new laser data or a changed roof, run `roof_solar.py` with `--publish` and then
 `simulate.mjs` (see the tool's README).
 
+Glare counts only when golfers are out: the high-season hours are weighted by
+when cars are plugged in at the club's chargers (golfers charge while they
+play), per month and hour, so glare at dawn counts for nothing.
+
+## Elpris nu tab (for the staff, in Swedish)
+
+What a kWh costs per quarter hour from now until the last published SE4 price
+(tomorrow's arrive around 13:00): the spot price plus everything on top (the
+contract's surcharge and fees, the grid energy fee, energy tax), excl. VAT,
+shown as cheap / normal / expensive thirds, with the cheapest three hours
+ahead. It also shows this month's highest hour so far from E.ON's meter (the
+effektavgift's ceiling: every kW above it costs the month's kr/kW) and, hour
+by hour, the room under it: the peak minus what the facility draws at that
+hour on a busy day (the 90th percentile of the last four weeks). E.ON's values
+arrive about a day late, so today's own use is not in it. The logic is in
+`public/now.js` (tested in `server/now.test.js`).
+
 ## Limits
 
 The numbers depend on the limits ChargeNode's load balancing has been set to.

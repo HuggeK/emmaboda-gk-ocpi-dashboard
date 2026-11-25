@@ -2781,7 +2781,12 @@ function bindGlareControls(s) {
 // the roofs a step adds to the step before.
 function solarSelection(show, buildings) {
   const have = new Set(buildings.map((b) => b.key));
-  if (show === 'all') return { keys: have, focus: have };
+  if (show === 'all') {
+    // All panels shown, but the camera stays close on the clubhouse buildings:
+    // the camping is 800 m away and has its own buttons.
+    const home = buildings.filter((b) => Math.hypot(b.e - buildings[0].e, b.n - buildings[0].n) < 200);
+    return { keys: have, focus: new Set(home.map((b) => b.key)) };
+  }
   const i = Math.max(0, SOLAR_STEPS.findIndex((st) => st.key === show));
   const keys = new Set(SOLAR_STEPS[i].keys.filter((k) => have.has(k)));
   const before = new Set(i ? SOLAR_STEPS[i - 1].keys : []);
@@ -2862,7 +2867,8 @@ function feedersHtml() {
 
 async function renderSolar() {
   const root = $('#view-solar');
-  state.solar ||= { show: 'step1', data: null, view: null, sunDay: 'summer', sunHour: 13 };
+  // ?roofs=step2 or ?roofs=all opens the 3D model on that choice (for links).
+  state.solar ||= { show: new URLSearchParams(location.search).get('roofs') || 'step1', data: null, view: null, sunDay: 'summer', sunHour: 13 };
   const s = state.solar;
   if (!s.data) {
     root.innerHTML = '<div class="loading">Loading the roof model...</div>';

@@ -18,6 +18,8 @@ club's account has these):
 |---|---|
 | [y26a018-62650_5350_25.copc.laz](https://dl1.lantmateriet.se/hojd/data/pointcloud/sls/26a018/y26a018-62650_5350_25.copc.laz) | Laser scan, April 2026 (0.5 points/m²) |
 | [y19a018-62650_5350_25.copc.laz](https://dl1.lantmateriet.se/hojd/data/pointcloud/sls/19a018/y19a018-62650_5350_25.copc.laz) | Laser scan, April 2019 (0.67 points/m²): merged with 2026 for a denser cloud |
+| [y26a018-62625_5350_25.copc.laz](https://dl1.lantmateriet.se/hojd/data/pointcloud/sls/26a018/y26a018-62625_5350_25.copc.laz) | The tile south of it, April 2026: the camping (scout cabin and cabins) |
+| [y19a018-62625_5350_25.copc.laz](https://dl1.lantmateriet.se/hojd/data/pointcloud/sls/19a018/y19a018-62625_5350_25.copc.laz) | The same, April 2019 |
 | [byggnad_kn0862.zip](https://dl1.lantmateriet.se/byggnadsverk/byggnad_kn0862.zip) | Building outlines, Emmaboda municipality: exact roof edges |
 | [o62650_5350_25_mr26.tif](https://dl1.lantmateriet.se/bild/data/orto/se0_16m_sweref/2026_B2/o62650_5350_25_mr26.tif) | Orthophoto April 2026, 16 cm (optional, shown under the roofs) |
 
@@ -34,6 +36,7 @@ With QGIS's Python (GDAL, NumPy, SciPy) and QGIS's PDAL for the laser data:
 $gis = "C:\Projects\Emmaboda GK\gis"
 & "C:\Program Files\QGIS 4.2.3\bin\python-qgis.bat" tools\roof-solar\roof_solar.py `
     --laz "$gis\y26a018-62650_5350_25.copc.laz" "$gis\y19a018-62650_5350_25.copc.laz" `
+          "$gis\y26a018-62625_5350_25.copc.laz" "$gis\y19a018-62625_5350_25.copc.laz" `
     --buildings "$gis\byggnad_kn0862.zip" --ortho "$gis\o62650_5350_25_mr26.tif"
 ```
 
@@ -96,10 +99,20 @@ node tools\roof-solar\site-layers.mjs golf.geojson `
     --glare "scout-w|Scout cabin, west slope (if built)|glare-scout-w.json"
 ```
 
-`--observers` takes any GeoJSON points (a terrace, a road, windows), with
-`look_e`/`look_n` per point or `--look-at E,N` for all. The model is a worst
-case: flat ground, a clear sky every day, no trees or buildings in between, and
-no brightness model. The output keeps the OpenStreetMap attribution (ODbL),
+Each walk point looks along its line of play: at the pin, at the next target
+150 m ahead on the hole line (`--ahead-m`) and in the walking direction; the
+nearest of these to the glare counts. Add `--forest golf.geojson` to let the
+OpenStreetMap forest block the reflection as a 15 m canopy (`--tree-m`): the
+Solar tab's runs use it, as the camping sits in the forest. `--observers` takes
+any GeoJSON points (a terrace, a road, windows), with `looks` or
+`look_e`/`look_n` per point, or `--look-at E,N` for all. Still close to a worst
+case: flat ground, a clear sky every day, no single trees or buildings in
+between, and no brightness model.
+
+The purchase steps (`SOLAR_STEPS` in `public/contracts.js`) are what
+`simulate.mjs` simulates besides each roof alone; `--exclude kansli:W --out
+public/data/solar-effekt-nowest.json` gives the same steps without the office's
+west roof, which the Solar tab shows beside them. The output keeps the OpenStreetMap attribution (ODbL),
 which the Solar tab shows under the model.
 
 ## 3. Look at it

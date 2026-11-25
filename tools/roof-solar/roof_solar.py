@@ -43,6 +43,12 @@ BUILDINGS = [
      "lean_tos": [{"side": "N", "depth_m": 2.5, "tilt": 15, "what": "the golf carts' lean-to (depth from the aerial photo, 15° pitch assumed)"}]},
     {"key": "ladan", "name": "Barn (ladan)", "e": 536482, "n": 6265589, "roof": "Eternit with asbestos: the roof must be replaced (asbestos removal, new roof) before any panels"},
     {"key": "restaurang", "name": "Restaurant", "e": 536516, "n": 6265488, "roof": "Kitchen, cold rooms and heat pump underneath: high daytime use"},
+    # The camping, about 800 m south, on its own feeder (N1XV 4×240, ~800 m to
+    # the meter cabinet): laser tile 62625_5350 besides 62650_5350.
+    {"key": "scout", "name": "Scout cabin (scoutstugan)", "e": 536280, "n": 6264722, "roof": "Sheet metal: panels clamp straight on. In a forest clearing (shade); behind the camping feeder"},
+    {"key": "cabin1", "name": "Cabin, north (stuga)", "e": 536316, "n": 6264791, "roof": "Tiles, built 2010: hooks through the tiles; behind the camping feeder"},
+    {"key": "cabin2", "name": "Cabin, middle (stuga)", "e": 536315, "n": 6264775, "roof": "Tiles, built 2010: hooks through the tiles; behind the camping feeder"},
+    {"key": "cabin3", "name": "Cabin, south (stuga)", "e": 536315, "n": 6264757, "roof": "Tiles, built 2010: hooks through the tiles; behind the camping feeder"},
 ]
 
 PANEL_W = 1.134  # m, along the roof's contour (portrait)

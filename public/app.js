@@ -17,7 +17,7 @@ import {
 import { DEFAULT_TARIFF, expandSeries, hourPrices, hourlySpot, meterHours, splitHours, dailyPeaks, monthlyMeter, summarize, seasonalPicture, rateFromMeter, monthlyTopHours, typicalDay } from './meter.js';
 import { FACILITY_LOADS, BASE_LOAD_KW, explainPeak, inHours, loadLabel } from './facility.js';
 import { DEFAULT_COSTS, MARKET_BAND, account, limitSavings, priceAdvice, winterCeilingCheck, nightOffCheck } from './economics.js';
-import { BILL, BILL_PARTS, BILL_SOURCE, CAMPING_SITES, FEEDERS, FEEDER_CABLE, GRID_2027, HOLE_NAMES, ROOF_WORK, SOLAR_SIMULATION, billTotal } from './contracts.js';
+import { BILL, BILL_PARTS, BILL_SOURCE, FEEDERS, FEEDER_CABLE, GRID_2027, HOLE_NAMES, RETAIL_CONTRACT, ROOF_WORK, SOLAR_SIMULATION, SOLAR_STEPS, billTotal } from './contracts.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -2172,7 +2172,7 @@ function contractsHtml(rows = []) {
       <tbody>${BILL_PARTS.map((p) => `<tr><td>${esc(p.label)}</td><td class="num">${fmtMoney(now[p.key], 'SEK')}</td><td class="num">${Math.round((now[p.key] / total) * 100)}%</td><td class="num">${fmtNum(ore(now[p.key]), 1)}</td><td>${p.negotiable === 'yes' ? '<span class="ok">Yes</span>' : 'No'}</td><td class="subtle">${esc(p.how)}</td></tr>`).join('')}</tbody>
     </table></div>
     <p><strong>The grid (E.ON Elnät): no rebate to negotiate.</strong> The grid is a monopoly and its tariffs are regulated by Energimarknadsinspektionen; E.ON must charge every customer on the same tariff the same way, so a discount on the nätavgift is not possible. What the club controls is the monthly peak (${Math.round((now.effekt / total) * 100)}% of the bill), and whether the tariff and fuse size still fit, which is worth checking with E.ON Elnät if the peaks fall a lot.</p>
-    <p><strong>The electricity contract: worth comparing.</strong> It is the largest part, ${Math.round((now.retail / total) * 100)}% of the bill, and averaged <strong>${fmtNum(retailOre, 1)} öre/kWh</strong> (${fmtNum(retailOreBefore, 1)} öre the year before). That covers the quarter-hour spot price plus E.ON’s surcharge, fees and certificates, and it follows the market, so it cannot be compared with a fixed price directly. What can be compared is the <strong>surcharge and the fixed fees</strong> on a spot-price contract.${split} Ask E.ON what they are on the current P15M contract, then get offers from a few other retailers for the same kind of contract. Every öre counts across the year: ${sensitivity.join(' · ')}.</p>
+    <p><strong>The electricity contract: worth comparing.</strong> It is the largest part, ${Math.round((now.retail / total) * 100)}% of the bill, and averaged <strong>${fmtNum(retailOre, 1)} öre/kWh</strong> (${fmtNum(retailOreBefore, 1)} öre the year before). That covers the quarter-hour spot price plus E.ON’s surcharge, fees and certificates, and it follows the market, so it cannot be compared with a fixed price directly. What can be compared is the <strong>surcharge and the fixed fees</strong> on a spot-price contract.${split} The contract itself is already at E.ON’s floor: <strong>${fmtNum(RETAIL_CONTRACT.surchargeOre, 0)} öre/kWh surcharge and no annual fee</strong>, the lowest E.ON offers.${spotOre !== null ? ` So about ${fmtNum(Math.max(0, retailOre - spotOre - RETAIL_CONTRACT.surchargeOre), 1)} öre/kWh of the above is other per-kWh items on the bill (certificates and E.ON’s variable costs): ask E.ON to itemise them, and compare offers on the total above spot, not just the surcharge.` : ''} Other retailers can still be asked for the same kind of contract (quarter-hour spot). Every öre counts across the year: ${sensitivity.join(' · ')}.</p>
     <p class="subtle">A fixed price only pays if the market rises; with a spot price the club also benefits from the cheap hours, especially with a battery or solar later. The quarter-hour price means each 15 minutes is priced separately, so moving flexible loads (golf carts, the irrigation start) to cheap quarters also helps a little.</p>
     ${grid2027Html(now, spotOre)}`;
 }
@@ -2578,15 +2578,15 @@ function glareHeatmap(run) {
 function solarGlareHtml(site, selected) {
   const runs = site.glare.map((run) => ({ run, s: glareSummary(run) }));
   const sel = runs.find((r) => r.run.key === selected) || runs[0];
-  const office = runs.find((r) => r.run.key.startsWith('office'));
-  const scout = runs.filter((r) => r.run.key.startsWith('scout'));
-  const best = scout.length ? [...scout].sort((a, b) => a.s.weighted - b.s.weighted)[0] : null;
+  const bad = runs.filter((r) => r.s.high >= 5).sort((a, b) => b.s.high - a.s.high);
+  const fine = runs.filter((r) => r.s.high < 5);
   return `<div class="card">
-    <div class="card-head"><h3>Glare: will the panels dazzle golfers?</h3><span class="subtle">the sun’s reflection in the panels, traced for every 5 minutes of ${esc(sel.run.settings.year)} to eye height (1.6 m) where golfers walk</span></div>
-    ${office ? `<div class="notice ${office.s.high > 5 ? 'warn' : ''}"><h3>${esc(office.run.label)}: ${fmtNum(office.s.high, 0)} hours in the high season</h3>
-      The west roof’s reflection reaches golfers’ view of the pin about <strong>${fmtNum(office.s.high, 0)} h in June–August</strong> (and ${fmtNum(office.s.season, 0)} h in the rest of the season), at ${office.run.points.length} places, ${office.s.central} of them straight in the eyes. Where: ${esc(office.s.where.join('; '))}. When: ${esc(office.s.when)}, near midday, when the course is busiest. For the green-fee guests this is the one to take seriously: leave the west roof without panels, or use anti-glare (matt, textured) glass there and ask the installer for its reflectance.</div>` : ''}
-    ${best ? `<div class="notice"><h3>The scout cabin: little glare whichever way the roof faces</h3>
-      Its roof has no laser data yet, so three possible slopes were tested (27° pitch, a 15 × 2.4 m array). In golfers’ view: ${scout.map((r) => `${esc(r.run.label.replace(/^Scout cabin, | \(if built\)$/g, ''))} ${fmtNum(r.s.high, 1)} h in the high season, ${fmtNum(r.s.season, 1)} h in the rest of the season`).join('; ')}. The <strong>${esc(best.run.label.replace(/^Scout cabin, | \(if built\)$/g, ''))}</strong> is the gentlest. What remains is mostly at the edge of the rough or far off, where trees between the cabin and the course (not in the model) would block much of it.</div>` : ''}
+    <div class="card-head"><h3>Glare: will the panels dazzle golfers?</h3><span class="subtle">the sun’s reflection in the panels, traced for every 5 minutes of ${esc(sel.run.settings.year)} to eye height (1.6 m) where golfers walk, looking along the line of play</span></div>
+    ${bad.length ? `<div class="notice warn"><h3>In the high season: ${bad.map((r) => `${esc(r.run.label)} ${fmtNum(r.s.high, 0)} h`).join(', ')}</h3>
+      ${bad.map((r) => `<strong>${esc(r.run.label)}</strong>: ${fmtNum(r.s.high, 0)} h a year in June–August (${fmtNum(r.s.season, 0)} h in the rest of the season) at ${r.run.points.length} places, ${r.s.central} of them straight in the eyes; ${esc(r.s.where.join('; '))}; ${esc(r.s.when)}.`).join('<br>')}
+      <br>For the green-fee guests these are the ones to take seriously: leave those roof faces without panels, or use anti-glare (matt, textured) glass there and ask the installer for its reflectance.</div>` : ''}
+    ${fine.length ? `<div class="notice"><h3>Little or none in the high season: ${fine.map((r) => esc(r.run.label)).join(', ')}</h3>
+      Under 5 hours a year in June–August each. ${fine.map((r) => `${esc(r.run.label)}: ${fmtNum(r.s.high, 1)} h, ${fmtNum(r.s.season, 1)} h in the rest of the season`).join('; ')}. The camping’s roofs sit in the forest, which hides most of their reflection from the course.</div>` : ''}
     <div class="table-wrap"><table>
       <thead><tr><th>Panels</th><th class="num">High season (Jun–Aug), h</th><th class="num">Rest of the season, h</th><th class="num">Winter, h</th><th class="num">Weighted, h</th><th class="num">Places (straight in the eyes)</th><th>Where</th><th>When</th></tr></thead>
       <tbody>${runs.map(({ run, s }) => `<tr><td>${run.key === sel.run.key ? '<strong>' : ''}${esc(run.label)}${run.key === sel.run.key ? '</strong>' : ''}</td><td class="num"><strong>${fmtNum(s.high, 1)}</strong></td><td class="num">${fmtNum(s.season, 1)}</td><td class="num">${fmtNum(s.off, 1)}</td><td class="num">${fmtNum(s.weighted, 0)}</td><td class="num">${run.points.length} (${s.central})</td><td class="subtle">${esc(s.where.join('; ') || '–')}</td><td class="subtle">${esc(s.when)}</td></tr>`).join('')}</tbody>
@@ -2594,7 +2594,7 @@ function solarGlareHtml(site, selected) {
     <h4>When it happens: ${esc(sel.run.label)}</h4>
     <div id="solar-glare-heat">${glareHeatmap(sel.run)}</div>
     <details><summary>How this is worked out, and what it leaves out</summary>
-      <p class="subtle">Where golfers walk: a 4 m grid within 40 m of each hole line from OpenStreetMap, without forest, water and buildings (tools/roof-solar/walkzone.mjs); on the tee, fairway and green or within 15 m of the line counts as “likely”, the rough further out as “possible”. Each place looks at its hole’s pin. Glare (tools/roof-solar/glare.mjs): the sun’s direction is mirrored in each panel; where the reflected ray reaches a place’s eye, the angle to the view towards the pin decides how bad it is: within 10° straight in the eyes, within 25° in the field of view (counted here), within 50° peripheral (not counted). Weighted hours: high season ×${GLARE_WEIGHTS[0]}, rest of the season (1 Mar – 25 Oct) ×${GLARE_WEIGHTS[1]}, winter ×${GLARE_WEIGHTS[2]}. A worst case: flat ground, a clear sky every day, and no trees or buildings in between; the brightness is not modelled (any panel glass reflects a few per cent of the sun, which is still dazzling, if brief). Run it again for another roof, hole or layout with the commands in tools/roof-solar/README.md.</p>
+      <p class="subtle">Where golfers walk: a 4 m grid within 40 m of each hole line from OpenStreetMap, without forest, water and buildings (tools/roof-solar/walkzone.mjs); on the tee, fairway and green or within 15 m of the line counts as “likely”, the rough further out as “possible”. Each place looks along its line of play: at the pin, at the next target 150 m ahead on the hole line, and in the walking direction; the nearest of them to the glare counts. Glare (tools/roof-solar/glare.mjs): the sun’s direction is mirrored in each panel; where the reflected ray reaches a place’s eye, the angle to that view decides how bad it is: within 10° straight in the eyes, within 25° in the field of view (counted here), within 50° peripheral (not counted). Weighted hours: high season ×${GLARE_WEIGHTS[0]}, rest of the season (1 Mar – 25 Oct) ×${GLARE_WEIGHTS[1]}, winter ×${GLARE_WEIGHTS[2]}. Close to a worst case: flat ground, a clear sky every day; the forest areas from OpenStreetMap block the reflection as a 15 m canopy, but single trees, gaps and buildings are not modelled; the brightness is not modelled (any panel glass reflects a few per cent of the sun, which is still dazzling, if brief). Run it again for another roof, hole or layout with the commands in tools/roof-solar/README.md.</p>
     </details>
   </div>`;
 }
@@ -2615,16 +2615,72 @@ function bindGlareControls(s) {
     if (r && $('#solar-glare-heat')) $('#solar-glare-heat').innerHTML = glareHeatmap(r);
     if (r) {
       const F = Object.fromEntries(r.point_fields.map((k, i) => [k, i]));
-      const pts = r.points.length ? r.points : [[CAMPING_SITES[0].e, CAMPING_SITES[0].n]];
-      s.view.frame({ e: pts.reduce((a, p) => a + p[F.e], 0) / pts.length, n: pts.reduce((a, p) => a + p[F.n], 0) / pts.length });
+      const pts = r.points;
+      if (pts.length) s.view.frame({ e: pts.reduce((a, p) => a + p[F.e], 0) / pts.length, n: pts.reduce((a, p) => a + p[F.n], 0) / pts.length });
     }
   });
   $('#solar-frame')?.addEventListener('click', (event) => {
     const chip = event.target.closest('[data-frame]');
     if (!chip) return;
     const f = chip.dataset.frame;
-    s.view.frame(f === 'camping' ? { e: CAMPING_SITES[0].e + 20, n: CAMPING_SITES[0].n + 30 } : f);
+    const scout = s.data.buildings.find((b) => b.key === 'scout');
+    s.view.frame(f === 'camping' && scout ? { e: scout.e + 20, n: scout.n + 30 } : f === 'camping' ? 'site' : f);
   });
+}
+
+// ---- what to buy, step by step (SOLAR_STEPS) ----------------------------------
+// The roofs shown in the 3D model for a choice, and the ones the camera goes to:
+// the roofs a step adds to the step before.
+function solarSelection(show, buildings) {
+  const have = new Set(buildings.map((b) => b.key));
+  if (show === 'all') return { keys: have, focus: have };
+  const i = Math.max(0, SOLAR_STEPS.findIndex((st) => st.key === show));
+  const keys = new Set(SOLAR_STEPS[i].keys.filter((k) => have.has(k)));
+  const before = new Set(i ? SOLAR_STEPS[i - 1].keys : []);
+  return { keys, focus: new Set([...keys].filter((k) => !before.has(k))) };
+}
+
+function solarStepsHtml(effekt, noWest, site) {
+  const find = (res, keys) => res?.results.find((r) => r.keys.length === keys.length && keys.every((k) => r.keys.includes(k)));
+  const glareOf = (keys) => (site?.glare || []).filter((g) => keys.includes(g.key));
+  const cost = SOLAR_SIMULATION.costPerKwp;
+  let prev = null;
+  let prevNo = null;
+  const rows = SOLAR_STEPS.map((st) => {
+    const r = find(effekt, st.keys);
+    const n = find(noWest, st.keys);
+    if (!r) return '';
+    const total = r.effektKr + r.energyKr;
+    const add = { kwp: r.kwp - (prev?.kwp || 0), kr: total - (prev ? prev.effektKr + prev.energyKr : 0) };
+    const nTotal = n ? n.effektKr + n.energyKr : null;
+    const nAdd = n ? nTotal - (prevNo ? prevNo.effektKr + prevNo.energyKr : 0) : null;
+    const nKwp = n ? n.kwp - (prevNo?.kwp || 0) : null;
+    prev = r;
+    prevNo = n;
+    const g = glareOf(st.glare);
+    const glareHigh = g.map((x) => `${esc(x.label)} ${fmtNum(x.minutes_in_view_by_period[0] / 60, 0)} h`).join(', ');
+    const pay = (kwp, kr) => cost.map((c) => fmtNum((c * kwp) / kr, 1)).join(' / ');
+    return `<tr>
+      <td style="white-space:nowrap"><strong>${esc(st.label)}</strong></td>
+      <td class="num">+${fmtNum(add.kwp, 1)} kWp<br><span class="subtle">${fmtNum(r.kwp, 1)} in all</span></td>
+      <td class="num"><strong>+${fmtMoney(add.kr, 'SEK')}</strong><br><span class="subtle">${fmtNum(add.kr / add.kwp, 0)} kr per kWp · ${Math.round(r.onSite * 100)} % used on site</span></td>
+      <td class="num">${pay(add.kwp, add.kr)} yrs</td>
+      <td class="num">${n ? `+${fmtNum(nKwp, 1)} kWp, +${fmtMoney(nAdd, 'SEK')}<br><span class="subtle">${pay(nKwp, nAdd)} yrs</span>` : '–'}</td>
+      <td class="subtle">${glareHigh || '–'}</td>
+      <td class="subtle"><strong>First:</strong> ${esc(st.before)}<br><strong>Why it may wait:</strong> ${esc(st.weaker)}</td>
+    </tr>`;
+  }).join('');
+  const s1 = find(noWest, SOLAR_STEPS[0].keys);
+  const k1 = find(noWest, ['kansli']);
+  return `<div class="card">
+    <div class="card-head"><h3>What to buy, step by step</h3><span class="subtle">each step adds roofs to the one before; the buttons above the 3D model show each step’s roofs</span></div>
+    ${s1 ? `<div class="notice"><h3>Without the west roof (or the studio), is it still worth it?</h3>Yes. The office building’s south and east roofs alone are ${fmtNum(k1.kwp, 1)} kWp: about <strong>${fmtMoney(k1.effektKr + k1.energyKr, 'SEK')} a year</strong>, payback ${cost.map((c) => fmtNum((c * k1.kwp) / (k1.effektKr + k1.energyKr), 1)).join(' / ')} years. With the studio, still without the west roof: ${fmtNum(s1.kwp, 1)} kWp, ${fmtMoney(s1.effektKr + s1.energyKr, 'SEK')} a year. A small system costs more per kWp (the fixed part of the job), so count on the upper price for the office alone.</div>` : ''}
+    <div class="table-wrap"><table>
+      <thead><tr><th>Step</th><th class="num">Adds</th><th class="num">Saved a year (what the step adds)</th><th class="num">Payback (${cost.map((c) => `${c / 1000}k`).join(' / ')} kr/kWp)</th><th class="num">Without the office’s west roof</th><th>Glare in golfers’ view, high season</th><th>Before, and why it may wait</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <p class="subtle">Saved a year: simulated per quarter hour on the club’s measured consumption (as the cards below); a later step is worth what it adds on top of the steps before, which falls as more is exported at the spot price. Glare: hours a year in June–August when the roofs the step adds reflect the sun into a golfer’s view (the card above), with the forest around the course blocking what it hides.</p>
+  </div>`;
 }
 
 // ---- the feeder cables and the losses in them -------------------------------
@@ -2652,13 +2708,13 @@ function feedersHtml() {
         <tr><td>Ground cabinet → office building (${club.lengthM} m)</td>${sizes.map((kw) => `<td class="num">${fmtNum(cableLossW(kw, club.ohm), 0)} W (${fmtNum((cableLossW(kw, club.ohm) / (kw * 10)), 1)} %)</td>`).join('')}</tr>
       </tbody>
     </table></div>
-    <p class="subtle">At full output; over a year the loss is roughly half of that percentage, since panels mostly run well below their peak (the loss grows with the square of the power). A camping plant’s surplus goes camping → ground cabinet → clubhouse, so both rows apply to it; panels on the office building are used right there by the restaurant and the clubhouse, so almost none of their output travels a feeder at all. The cabins’ distance to the camping board is not in the analysis: a long thin cable from a cabin to the board would matter more than the thick feeder. Their roofs are outside the laser data used so far: Lantmäteriet’s tile 62625_5350 is needed to lay out panels there. Cables, lengths and materials: ${esc(FEEDERS.source)}; to be verified by the electrician.</p>
+    <p class="subtle">At full output; over a year the loss is roughly half of that percentage, since panels mostly run well below their peak (the loss grows with the square of the power). A camping plant’s surplus goes camping → ground cabinet → clubhouse, so both rows apply to it; panels on the office building are used right there by the restaurant and the clubhouse, so almost none of their output travels a feeder at all. The cabins’ distance to the camping board is not in the analysis: a long thin cable from a cabin to the board would matter more than the thick feeder. Cables, lengths and materials: ${esc(FEEDERS.source)}; to be verified by the electrician.</p>
   </div>`;
 }
 
 async function renderSolar() {
   const root = $('#view-solar');
-  state.solar ||= { show: 'suggested', data: null, view: null, sunDay: 'summer', sunHour: 13 };
+  state.solar ||= { show: 'step1', data: null, view: null, sunDay: 'summer', sunHour: 13 };
   const s = state.solar;
   if (!s.data) {
     root.innerHTML = '<div class="loading">Loading the roof model...</div>';
@@ -2674,6 +2730,10 @@ async function renderSolar() {
   if (s.effekt === undefined) {
     // The per-roof simulation (tools/roof-solar → data/solar-effekt.json); optional.
     s.effekt = await fetch('data/solar-effekt.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  }
+  if (s.noWest === undefined) {
+    // The same simulation without the office's west roof (simulate.mjs --exclude kansli:W); optional.
+    s.noWest = await fetch('data/solar-effekt-nowest.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
   }
   if (s.site === undefined) {
     // The golf course (OpenStreetMap) and the glare runs (tools/roof-solar/site-layers.mjs); optional.
@@ -2713,7 +2773,7 @@ async function renderSolar() {
     <div class="card">
       <div class="card-head"><h3>The roofs and the panels that fit</h3><span class="spacer"></span>
         <span class="filters" id="solar-show">
-          <button class="chip ${s.show === 'suggested' ? 'active' : ''}" data-show="suggested">Suggested: office + studio</button>
+          ${SOLAR_STEPS.map((st) => `<button class="chip ${s.show === st.key ? 'active' : ''}" data-show="${st.key}">${esc(st.label)}</button>`).join('')}
           <button class="chip ${s.show === 'all' ? 'active' : ''}" data-show="all">All roofs</button>
         </span>
       </div>
@@ -2747,7 +2807,7 @@ async function renderSolar() {
         ${s.site.glare.map((g) => `<button class="chip ${s.glare === g.key ? 'active' : ''}" data-glare="${esc(g.key)}">${esc(g.label)}</button>`).join('')}
       </div>
       <div class="series-legend">
-        <span class="subtle">Dots: places where the reflection comes within 25° of the view to the pin, weighted minutes a year (high season ×${GLARE_WEIGHTS[0]}, rest of the season ×${GLARE_WEIGHTS[1]}):</span>
+        <span class="subtle">Dots: places where the reflection comes within 25° of a golfer’s view along the line of play, weighted minutes a year (high season ×${GLARE_WEIGHTS[0]}, rest of the season ×${GLARE_WEIGHTS[1]}):</span>
         ${GLARE_LEGEND.map((g) => `<span><i class="swatch" style="background:${g.color}"></i>${esc(g.label)}</span>`).join('')}
         <span class="subtle">Dashed white: the hole lines. ${esc(s.site.attribution)}.</span>
       </div>` : ''}
@@ -2769,6 +2829,7 @@ async function renderSolar() {
       </table></div>
     </div>
     ${s.effekt ? solarEffektHtml(s.effekt, buildings, valueOf) : ''}
+    ${s.effekt ? solarStepsHtml(s.effekt, s.noWest, s.site) : ''}
     ${roofWorkHtml(buildings, valueOf)}
     ${feedersHtml()}
     <div class="card">
@@ -2801,7 +2862,8 @@ async function renderSolar() {
     if (!chip) return;
     s.show = chip.dataset.show;
     for (const c of $$('#solar-show .chip')) c.classList.toggle('active', c === chip);
-    s.view?.select(new Set(s.show === 'all' ? buildings.map((b) => b.key) : SUGGESTED_ROOFS));
+    const sel = solarSelection(s.show, buildings);
+    s.view?.select(sel.keys, sel.focus);
   });
   try {
     const { mountSolar3d } = await import('./solar3d.js');
@@ -2813,7 +2875,8 @@ async function renderSolar() {
         return { label: HOLE_NAMES[l.way], e, n };
       }),
     };
-    s.view = mountSolar3d($('#solar-3d'), s.data, new Set(s.show === 'all' ? buildings.map((b) => b.key) : SUGGESTED_ROOFS), site, site ? CAMPING_SITES : []);
+    const sel = solarSelection(s.show, buildings);
+    s.view = mountSolar3d($('#solar-3d'), s.data, sel.keys, site, sel.focus);
     bindSunControls(s);
     if (site) bindGlareControls(s);
   } catch (err) {

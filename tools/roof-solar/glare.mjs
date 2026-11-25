@@ -20,6 +20,11 @@
 //   array on a roof without laser data: one flat rectangle centred at E,N
 //   (SWEREF 99 TM), its centre height above ground (m), tilt and azimuth (°),
 //   length along the ridge and depth up the slope (m).
+// --forest golf.geojson [--tree-m 15]: forest and wood areas (OpenStreetMap)
+//   as an opaque canopy this high: a reflection whose path from the panel to
+//   the eye passes through it below the treetops is blocked (counted apart).
+//   Crude (gaps, leafless winters and single trees are not modelled), but
+//   closer to the truth for roofs in a clearing than no trees at all.
 // --high 06-01:08-31, --season 03-01:10-25, --weights 3,1,0: the high season,
 //   the playing season and how much a minute of glare in view counts in each
 //   (high season, rest of the season, off-season) for the weighted score.
@@ -179,9 +184,65 @@ const observers = obsFile.features.filter((f) => f.geometry?.type === 'Point').m
   // nearest one to the glare counts), else look_e/look_n. Level views.
   const targets = lookAt ? [lookAt] : looks?.length ? looks : le != null && ln != null ? [[le, ln]] : [];
   const views = targets.filter(([te, tn]) => Math.hypot(te - e, tn - n) > 1).map(([te, tn]) => norm([te - e, tn - n, 0]));
-  return { e, n, O: [e, n, eye], views, props, min: [0, 0, 0, 0], period: [0, 0, 0], masked: 0, days: new Set(), highDays: new Set(), first: null, last: null };
+  return { e, n, O: [e, n, eye], views, props, min: [0, 0, 0, 0], period: [0, 0, 0], masked: 0, blocked: 0, days: new Set(), highDays: new Set(), first: null, last: null };
 });
 const tan = Math.tan(spreadDeg * RAD);
+
+// ---- the forest canopy (optional): a 2 m grid of "is forest" -----------------
+const TREE_M = Number(arg('--tree-m', '15'));
+let canopy = null;
+if (arg('--forest')) {
+  const g = JSON.parse(fs.readFileSync(arg('--forest'), 'utf8'));
+  const pts = [...observers.map((o) => [o.e, o.n]), ...faces.map((f) => f.c)];
+  const C = 2;
+  const x0 = Math.min(...pts.map((p) => p[0])) - 50;
+  const y0 = Math.min(...pts.map((p) => p[1])) - 50;
+  const W = Math.ceil((Math.max(...pts.map((p) => p[0])) + 50 - x0) / C);
+  const H = Math.ceil((Math.max(...pts.map((p) => p[1])) + 50 - y0) / C);
+  const grid = new Uint8Array(W * H);
+  for (const f of g.features) {
+    const k = f.properties.natural || f.properties.landuse;
+    if (!['wood', 'forest'].includes(k)) continue;
+    const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.type === 'MultiPolygon' ? f.geometry.coordinates : [];
+    for (const poly of polys) {
+      // Scanline fill of each row of cells (even-odd over all rings).
+      const ys = poly[0].map((p) => p[1]);
+      const r0 = Math.max(0, Math.floor((Math.min(...ys) - y0) / C));
+      const r1 = Math.min(H - 1, Math.ceil((Math.max(...ys) - y0) / C));
+      for (let r = r0; r <= r1; r += 1) {
+        const y = y0 + (r + 0.5) * C;
+        const xs = [];
+        for (const ring of poly) {
+          for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+            const [xi, yi] = ring[i];
+            const [xj, yj] = ring[j];
+            if ((yi > y) !== (yj > y)) xs.push(xi + ((y - yi) * (xj - xi)) / (yj - yi));
+          }
+        }
+        xs.sort((a, b) => a - b);
+        for (let i = 0; i + 1 < xs.length; i += 2) {
+          for (let c = Math.max(0, Math.ceil((xs[i] - x0) / C - 0.5)); c <= Math.min(W - 1, Math.floor((xs[i + 1] - x0) / C - 0.5)); c += 1) grid[r * W + c] = 1;
+        }
+      }
+    }
+  }
+  canopy = { grid, x0, y0, W, H, C };
+}
+// Does the path from the eye O to the panel point P pass through the canopy?
+function blockedByTrees(O, P) {
+  if (!canopy) return false;
+  const { grid, x0, y0, W, H, C } = canopy;
+  const len = Math.hypot(P[0] - O[0], P[1] - O[1]);
+  for (let s = 1; s < len - 1; s += 1) {
+    const t = s / len;
+    const z = O[2] + t * (P[2] - O[2]);
+    if (z >= TREE_M) continue;
+    const c = Math.floor((O[0] + t * (P[0] - O[0]) - x0) / C);
+    const r = Math.floor((O[1] + t * (P[1] - O[1]) - y0) / C);
+    if (c >= 0 && c < W && r >= 0 && r < H && grid[r * W + c]) return true;
+  }
+  return false;
+}
 
 // ---- the year ------------------------------------------------------------------
 const swedish = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Stockholm', month: 'numeric', day: 'numeric', hour: 'numeric', hourCycle: 'h23' });
@@ -201,6 +262,7 @@ for (let t = Date.UTC(year, 0, 1); t < Date.UTC(year + 1, 0, 1); t += stepMin * 
   const period = periodOf(Number(p.month), Number(p.day));
   for (const o of observers) {
     let hit = null;
+    let treeHit = false;
     faces.forEach((f, fi) => {
       const r = rays[fi];
       if (hit || !r) return;
@@ -215,10 +277,17 @@ for (let t = Date.UTC(year, 0, 1); t < Date.UTC(year + 1, 0, 1); t += stepMin * 
         const tHit = dot(f.n, sub(o.O, p.c0)) / nr; // P = O − t·r lies on the panel's plane
         if (tHit <= 0) continue;
         const P = sub(o.O, mul(r, tHit));
-        if (inside(p, [dot(sub(P, p.c0), p.u), dot(sub(P, p.c0), p.v)], tHit * tan)) { hit = mul(r, -1); return; }
+        if (inside(p, [dot(sub(P, p.c0), p.u), dot(sub(P, p.c0), p.v)], tHit * tan)) {
+          if (blockedByTrees(o.O, P)) { treeHit = true; continue; }
+          hit = mul(r, -1);
+          return;
+        }
       }
     });
-    if (!hit) continue;
+    if (!hit) {
+      if (treeHit) { o.blocked += stepMin; }
+      continue;
+    }
     const a = o.views.length ? Math.min(...o.views.map((v) => angleDeg(hit, v))) : 0;
     const cls = CLASSES.findIndex((c) => a <= c.maxDeg);
     o.min[cls] += stepMin;
@@ -249,6 +318,7 @@ const fmt = (t) => new Date(t).toLocaleString('sv-SE', { timeZone: 'Europe/Stock
 console.log(`${observers.length} observers; ${faces.reduce((s, f) => s + f.panels.length, 0)} panels: ${faces.map((f) => `${f.building} ${f.dir} (${f.panels.length}, tilt ${f.tilt}°, az ${Math.round(f.azimuth)}°)`).join(', ')}`);
 console.log(`${year}, every ${stepMin} min: glare reaches some observer in ${(minutesAny / 60).toFixed(1)} h, in someone's field of view (≤ 25°) in ${(minutesInView / 60).toFixed(1)} h`);
 console.log(`observers that ever see it: ${hit.length}; in the field of view: ${observers.filter((o) => inViewMin(o) > 0).length}; straight in the eyes (≤ 10°): ${observers.filter((o) => o.min[0] > 0).length}`);
+if (canopy) console.log(`trees (${TREE_M} m canopy from the forest areas) block ${observers.filter((o) => o.blocked > 0).length} observers' glare for ${(observers.reduce((s, o) => s + o.blocked, 0) / 60).toFixed(0)} observer-hours`);
 console.log(`hours with glare in someone's view: high season ${(minutesByPeriod[0] / 60).toFixed(1)}, rest of the season ${(minutesByPeriod[1] / 60).toFixed(1)}, off-season ${(minutesByPeriod[2] / 60).toFixed(1)} (weights ${WEIGHTS.join('/')})`);
 for (const o of [...observers].sort((a, b) => score(b) - score(a) || inViewMin(b) - inViewMin(a)).slice(0, 5).filter((o) => inViewMin(o) > 0)) {
   console.log(`  E ${Math.round(o.e)} N ${Math.round(o.n)} ${JSON.stringify(o.props)}: ${o.min.join('/')} min (central/near/side/outside); in view ${o.period.join('/')} min (high/season/off), ${o.days.size} days (${o.highDays.size} in high season), ${fmt(o.first)} – ${fmt(o.last)}`);
@@ -259,7 +329,10 @@ if (outPath) {
     settings: { year, step_min: stepMin, spread_deg: spreadDeg, sun_mask_deg: sunMaskDeg, eye_m: eye, panels: panelSpec, arrays, look_at: lookAt || 'per observer', high: arg('--high', '06-01:08-31'), season: arg('--season', '03-01:10-25'), weights: WEIGHTS },
     periods: PERIODS,
     minutes_in_view_by_period: minutesByPeriod,
-    note: 'Flat ground; trees and buildings between the panels and the eye ignored (worst case). Intensity not modelled.',
+    note: canopy
+      ? `Flat ground; forest areas as an opaque ${TREE_M} m canopy, single trees and buildings ignored. Intensity not modelled.`
+      : 'Flat ground; trees and buildings between the panels and the eye ignored (worst case). Intensity not modelled.',
+    trees: canopy ? { tree_m: TREE_M, source: 'forest/wood areas, OpenStreetMap' } : null,
     attribution: obsFile.attribution || null,
     classes: CLASSES,
     faces: faces.map((f) => ({ building: f.building, dir: f.dir, tilt: f.tilt, azimuth: f.azimuth, panels: f.panels.length, centre: f.c.map((x) => Math.round(x * 10) / 10) })),

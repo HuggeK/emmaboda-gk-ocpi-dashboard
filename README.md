@@ -381,8 +381,10 @@ by [`tools/roof-solar`](tools/roof-solar/README.md):
   under the 3D model so people can find their way, and the glare runs from
   `walkzone.mjs` and `glare.mjs`: where and when the panels' reflection reaches
   golfers' view of the pin, with the high season (June–August) weighted most.
-  The feeder cables and the camping buildings are in `public/contracts.js`
-  (`FEEDERS`, from the club's energy analysis, and `CAMPING_SITES`).
+  The feeder cables and the purchase steps are in `public/contracts.js`
+  (`FEEDERS`, from the club’s energy analysis, and `SOLAR_STEPS`); the
+  same steps without the office’s west roof are in
+  `public/data/solar-effekt-nowest.json`.
 
 - `public/data/solar-roofs.json`: the roofs and the panels that fit, from
   Lantmäteriet's laser scans (2019 and 2026 merged) and building outlines.

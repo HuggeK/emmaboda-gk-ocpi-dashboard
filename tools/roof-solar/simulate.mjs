@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const M = await import(new URL('../../public/meter.js', import.meta.url));
 const A = await import(new URL('../../public/analysis.js', import.meta.url));
-const { GRID_2027 } = await import(new URL('../../public/contracts.js', import.meta.url));
+const { GRID_2027, SOLAR_STEPS } = await import(new URL('../../public/contracts.js', import.meta.url));
 
 const args = process.argv.slice(2);
 const arg = (flag, fallback) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : fallback);
@@ -379,7 +379,10 @@ const combine = (keys) => {
   }
   return out;
 };
-const roofSets = [...buildings.map((b) => [b.key]), ['kansli', 'studio'], ['kansli', 'studio', 'gamla'], buildings.map((b) => b.key)];
+// Each building alone, the purchase steps (SOLAR_STEPS, cumulative) and all roofs.
+const have = new Set(buildings.map((b) => b.key));
+const roofSets = [...buildings.map((b) => [b.key]), ...SOLAR_STEPS.map((s) => s.keys.filter((k) => have.has(k))), buildings.map((b) => b.key)]
+  .filter((keys, i, all) => keys.length && all.findIndex((o) => o.join() === keys.join()) === i);
 const kwpOf = (keys) => keys.reduce((s, k) => s + buildings.find((b) => b.key === k).kwp, 0);
 
 const results = { quarter: [], hour: [] };
@@ -425,6 +428,7 @@ const onSiteValue = (() => {
 const period = `${new Date(from).toLocaleString('en-GB', { month: 'short', year: 'numeric' })} – ${new Date(to - 1).toLocaleString('en-GB', { month: 'short', year: 'numeric' })}`;
 fs.writeFileSync(outPath, `${JSON.stringify({
   period,
+  ...(arg('--exclude') ? { excluded: arg('--exclude') } : {}),
   weatherYears: WEATHER === 'strang' ? `the actual weather, ${period} (SMHI STRÅNG)` : '2019–2023',
   weather: WEATHER,
   ...(WITH_STRANG ? { actualWeather: `SMHI STRÅNG, ${period}; days without STRÅNG values (${strangGapDays().join(', ')}) use the PVGIS mean` } : {}),

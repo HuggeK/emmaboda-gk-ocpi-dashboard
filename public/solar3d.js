@@ -320,31 +320,17 @@ function golfLayer(site, e0, n0) {
   return group;
 }
 
-// Planned or possible buildings without laser data (the camping): plain boxes.
-function siteBuildings(list, e0, n0) {
-  const group = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color: COLORS.wall, roughness: 0.9 });
-  for (const b of list) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(b.width, b.height, b.length), mat);
-    m.position.set(b.e - e0, b.height / 2, n0 - b.n);
-    m.rotation.y = -b.bearing * RAD;
-    m.castShadow = true;
-    group.add(m);
-    const tag = label(b.label, 1.6);
-    tag.position.set(b.e - e0, b.height + 6, n0 - b.n);
-    group.add(tag);
-  }
-  return group;
-}
-
 // Mounts the model in `container`. `selected` is a set of building keys whose
-// panels are shown; the others are drawn faded. `site` (optional) adds the golf
-// course, the camping buildings and the glare layers. Returns
-// { select, dispose, setSun, setGlare, frame }.
-export function mountSolar3d(container, data, selected, site = null, extraBuildings = []) {
+// panels are shown; the others are drawn faded; the camera looks at `focus`
+// (a set of keys, default the selected ones). `site` (optional) adds the golf
+// course and the glare layers. Returns { select, dispose, setSun, setGlare, frame }.
+export function mountSolar3d(container, data, selected, site = null, focus = null) {
   const buildings = data.buildings.filter((b) => !b.error && b.heights_dm);
-  const e0 = buildings.reduce((s, b) => s + b.e, 0) / buildings.length;
-  const n0 = buildings.reduce((s, b) => s + b.n, 0) / buildings.length;
+  // The origin (and the sun paths around it): the buildings near the first one,
+  // the clubhouse, not the middle of every roof (the camping is 800 m away).
+  const home = buildings.filter((b) => Math.hypot(b.e - buildings[0].e, b.n - buildings[0].n) < 200);
+  const e0 = home.reduce((s, b) => s + b.e, 0) / home.length;
+  const n0 = home.reduce((s, b) => s + b.n, 0) / home.length;
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -421,7 +407,6 @@ export function mountSolar3d(container, data, selected, site = null, extraBuildi
   ground.receiveShadow = true;
   scene.add(ground);
   if (site?.golf) scene.add(golfLayer(site, e0, n0));
-  if (extraBuildings.length) scene.add(siteBuildings(extraBuildings, e0, n0));
   for (const h of site?.holeLabels || []) {
     const tag = label(h.label, 2);
     tag.position.set(h.e - e0, 10, n0 - h.n);
@@ -464,7 +449,7 @@ export function mountSolar3d(container, data, selected, site = null, extraBuildi
   // Camera presets: 'buildings' (the default), 'site' (the whole course from
   // above, from the south) or a point { e, n } to look at from 250 m.
   function frame(where) {
-    if (where === 'buildings') return select(lastSelected);
+    if (where === 'buildings') return select(lastSelected, lastFocus);
     if (where === 'site') {
       const c = new THREE.Vector3((box[0] + box[2]) / 2 - e0, 0, n0 - (box[1] + box[3]) / 2);
       controls.target.copy(c);
@@ -501,23 +486,28 @@ export function mountSolar3d(container, data, selected, site = null, extraBuildi
   controls.maxDistance = site ? 1600 : 300;
 
   let lastSelected = selected;
-  function select(keys) {
+  let lastFocus = focus;
+  // Shows the panels on `keys` (the other roofs faded) and points the camera at
+  // the `look` roofs (default: all of `keys`).
+  function select(keys, look = null) {
     lastSelected = keys;
-    const focus = new THREE.Vector3();
+    lastFocus = look;
+    const target = new THREE.Vector3();
     let n = 0;
     for (const [key, g] of groups) {
       const on = keys.has(key);
       g.userData.panels.visible = on;
       g.userData.shell.material.opacity = on ? 1 : 0.35;
       g.userData.shell.material.depthWrite = on;
-      if (on) {
-        focus.add(g.userData.centre);
+      if (look ? look.has(key) : on) {
+        target.add(g.userData.centre);
         n += 1;
       }
     }
-    if (n) focus.divideScalar(n);
-    controls.target.copy(focus);
-    camera.position.copy(focus).add(new THREE.Vector3(60, 95, 150)); // from the south-east, high, with the sun paths in view
+    if (n) target.divideScalar(n);
+    const far = Math.max(...[...groups.entries()].filter(([k]) => (look || keys).has(k)).map(([, g]) => g.userData.centre.distanceTo(target)), 0);
+    controls.target.copy(target);
+    camera.position.copy(target).add(new THREE.Vector3(60, 95, 150).multiplyScalar(Math.max(1, far / 60))); // from the south-east, high, with the sun paths in view
     controls.update();
   }
 
@@ -531,7 +521,7 @@ export function mountSolar3d(container, data, selected, site = null, extraBuildi
   const ro = new ResizeObserver(resize);
   ro.observe(container);
   resize();
-  select(selected);
+  select(selected, focus);
 
   let running = true;
   (function loop() {

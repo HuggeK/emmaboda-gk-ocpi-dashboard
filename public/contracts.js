@@ -157,20 +157,45 @@ export const FEEDERS = {
   ],
 };
 
-// Solar at the camping: the scout cabin and the three cabins. Their roofs are
-// outside the laser tile used for the other buildings (Lantmäteriet's
-// 62625_5350 is needed), so only the outline is known: centre, size and the
-// long side's bearing (from Lantmäteriet's building outlines). Their output
-// would reach the rest of the club through the 800 m camping feeder.
-export const CAMPING_SITES = [
-  { key: 'scout', label: 'Scout cabin (scoutstugan)', e: 536280, n: 6264722, length: 17.4, width: 5.3, height: 4, bearing: 12, areaM2: 92 },
-  { key: 'cabin1', label: 'Cabin', e: 536316, n: 6264791, length: 10.2, width: 9.1, height: 3.5, bearing: 3, areaM2: 92 },
-  { key: 'cabin2', label: 'Cabin', e: 536315, n: 6264775, length: 10.4, width: 9.0, height: 3.5, bearing: 3, areaM2: 94 },
-  { key: 'cabin3', label: 'Cabin', e: 536315, n: 6264757, length: 10.3, width: 9.0, height: 3.5, bearing: 3, areaM2: 93 },
+// The electricity contract with E.ON (elhandel) as the club has it: quarter-hour
+// spot price plus this surcharge, no annual fee; E.ON says it is the lowest
+// they offer (club's information, Nov 2026). The meter model's surchargeOre
+// (meter.js, ~8 öre) is fitted to the bills and so also holds the other
+// per-kWh items on the bill (certificates, E.ON's variable costs).
+export const RETAIL_CONTRACT = { surchargeOre: 3, annualFeeKr: 0, asOf: '2026-11' };
+
+// What to buy, in order: each step adds roofs to the ones before (cumulative
+// keys). tools/roof-solar/simulate.mjs simulates each step; the Solar tab shows
+// them as choices in the 3D model. glare: the glare runs (data/solar-site.json)
+// for the roofs the step adds. before: what has to happen first. weaker: why
+// the step pays less, or may not be worth it.
+export const SOLAR_STEPS = [
+  {
+    key: 'step1', label: '1. Office + studio', keys: ['kansli', 'studio'], glare: ['kansli-se', 'kansli-w', 'studio'],
+    before: 'The studio roof’s load capacity; the office’s distribution point checked by the electrician.',
+    weaker: 'The office’s west roof dazzles golfers on hole 9 at midday in the high season: leave it out, or use anti-glare glass there.',
+  },
+  {
+    key: 'step2', label: '2. + Old office', keys: ['kansli', 'studio', 'gamla'], glare: ['gamla'],
+    before: 'The split roof fixed (ridge beam and roof), and the new aluminium cable from the office building laid.',
+    weaker: 'The roof work comes first; its steep south roof is otherwise the best per kWp. Its glare reaches nearby holes in the high season too.',
+  },
+  {
+    key: 'step3', label: '3. + Scout cabin', keys: ['kansli', 'studio', 'gamla', 'scout'], glare: ['scout'],
+    before: 'A look at the roof on site: the laser data there is blurred by the trees around the clearing.',
+    weaker: 'Small (a few kWp) and in a forest clearing: shade in the morning and evening. Its surplus travels the 800 m camping feeder. The sheet-metal roof itself is easy to mount on.',
+  },
+  {
+    key: 'step4', label: '4. + The cabins', keys: ['kansli', 'studio', 'gamla', 'scout', 'cabin1', 'cabin2', 'cabin3'], glare: ['cabins'],
+    before: 'The tile roofs inspected (built 2010: mid-life, no new roof needed, but tiles crack when walked on); hooks through the tiles.',
+    weaker: 'By now the club uses less of what the panels make in the middle of the day, so more is exported at the spot price; mounting on tiles costs more than on sheet metal; behind the 800 m camping feeder.',
+  },
 ];
 
-// Hole numbers for the OSM hole lines (golfTiles keeps the way id, not the number).
-export const HOLE_NAMES = { 910875400: 'Hole 9' };
+// Hole numbers for the OSM hole lines (golfTiles keeps the way id, not the
+// number). Hole 5: the club's website puts the scout cabin "along hole 5", and
+// this is the hole line passing it.
+export const HOLE_NAMES = { 910875400: 'Hole 9', 910875396: 'Hole 5' };
 
 // Each part, whether it can be negotiated, and how the club can lower it.
 export const BILL_PARTS = [

@@ -31,7 +31,7 @@ export const FACILITY_LOADS = [
   {
     key: 'daytime',
     label: 'Clubhouse, restaurant and golf carts',
-    detail: 'kitchen, cold rooms and freezers, the shop, camping (25 pitches, laundry) and charging the golf carts (several kW together, on their own circuit, so not in ChargeNode’s data), mainly 09–15',
+    detail: 'kitchen, cold rooms and freezers (the restaurant’s big freezer is switched off in winter), the shop, camping (25 pitches, laundry) and charging the golf carts (several kW together, on their own circuit, so not in ChargeNode’s data), mainly 09–15',
     hours: [9, 15],
     season: 'season',
     kw: null,

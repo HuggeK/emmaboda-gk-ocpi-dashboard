@@ -373,8 +373,16 @@ Reference figures used for defaults and the market band:
 
 ## Solar tab
 
-Would solar panels pay? Everything on the tab comes from two data files built
+Would solar panels pay? Everything on the tab comes from data files built
 by [`tools/roof-solar`](tools/roof-solar/README.md):
+
+- `public/data/solar-site.json`: the golf course around the buildings, from
+  OpenStreetMap (© OpenStreetMap contributors, ODbL, via golfTiles), drawn
+  under the 3D model so people can find their way, and the glare runs from
+  `walkzone.mjs` and `glare.mjs`: where and when the panels' reflection reaches
+  golfers' view of the pin, with the high season (June–August) weighted most.
+  The feeder cables and the camping buildings are in `public/contracts.js`
+  (`FEEDERS`, from the club's energy analysis, and `CAMPING_SITES`).
 
 - `public/data/solar-roofs.json`: the roofs and the panels that fit, from
   Lantmäteriet's laser scans (2019 and 2026 merged) and building outlines.

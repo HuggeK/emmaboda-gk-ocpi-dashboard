@@ -1,28 +1,48 @@
-// Glare from roof-mounted panels onto a golf hole: when and where would the
-// sun's reflection in the panels reach golfers' eyes?
+// Glare from roof-mounted panels: when, where and how far into people's field
+// of view would the sun's reflection in the panels reach their eyes?
 //
-//   node tools/roof-solar/glare.mjs <golf.geojson> --hole-way <OSM way id>
-//        [--roofs public/data/solar-roofs.json] [--building kansli] [--faces W]
-//        [--year 2026] [--step-min 5] [--spread-deg 0.5] [--eye-m 1.6]
-//        [--out glare.json]
+//   node tools/roof-solar/glare.mjs --observers <points.geojson>
+//        [--panels kansli:W,studio:S] [--roofs public/data/solar-roofs.json]
+//        [--look-at E,N] [--eye-m 1.6] [--year 2026] [--step-min 5]
+//        [--spread-deg 0.5] [--sun-mask-deg 15] [--out glare.json]
 //
-// golf.geojson: golf features in SWEREF 99 TM (EPSG:3006), e.g. extracted from
-// golfTiles (OpenStreetMap data, ODbL). The hole is picked by its OSM way id
-// (golfTiles keeps ids but not the hole number); its tees, green and fairways
-// are the golf=tee/green/fairway areas along the hole line.
+// --observers: GeoJSON points in SWEREF 99 TM (EPSG:3006), one per eye
+//   position; e.g. from walkzone.mjs (where golfers walk on a hole), or any
+//   hand-made set (a terrace, a road, a window). A point's look_e/look_n
+//   properties say where that person looks (a hole's pin); --look-at sets one
+//   target for all; with neither, every direction counts as "in view".
+//   Other properties are passed through to the output.
+// --panels: building key and roof faces (N, NE, E, SE, S, SW, W, NW, flat)
+//   from solar-roofs.json, comma-separated: the panels as laid out there.
+//   --panels none: only the --array ones.
+// --array name:E,N,height,tilt,azimuth,length,depth  (repeatable) a planned
+//   array on a roof without laser data: one flat rectangle centred at E,N
+//   (SWEREF 99 TM), its centre height above ground (m), tilt and azimuth (°),
+//   length along the ridge and depth up the slope (m).
+// --high 06-01:08-31, --season 03-01:10-25, --weights 3,1,0: the high season,
+//   the playing season and how much a minute of glare in view counts in each
+//   (high season, rest of the season, off-season) for the weighted score.
 //
-// Method (a simplified form of the usual glare-hazard analysis):
+// Method (a simplified form of the usual glare-hazard analysis, as in
+// Sandia's SGHAT / ForgeSolar):
 // - each panel is a flat quad at the measured roof height plus the rails,
-//   facing the roof face's tilt and azimuth;
-// - every step through the year with the sun up and in front of the panels,
-//   the sun's direction is mirrored in the panel normal (r = 2(n·s)n − s);
-// - an observer (golfer's eye) sees glare when the ray from the eye back along
-//   −r hits a panel, widened by spread-deg (the sun's disc, ±0.27°, plus panel
-//   and mounting unevenness);
-// - each hit also records the angle between the glare and the golfer's view
-//   towards the green.
-// Ground is taken as flat (laser heights are above the local ground), and
-// trees and buildings between the panels and the hole are ignored: a worst case.
+//   with its roof face's tilt and azimuth;
+// - every step through the year with the sun up and in front of a panel, the
+//   sun's direction is mirrored in the panel's normal (r = 2(n·s)n − s);
+// - an eye sees glare when the ray from the eye back along −r hits a panel,
+//   widened by --spread-deg (the sun's disc, ±0.27°, plus panel unevenness);
+// - each hit is classified by the angle between the glare and the person's
+//   view (eye towards the target at eye height):
+//     central ≤ 10°  (straight in the eyes while looking at the target)
+//     near    ≤ 25°  (clearly in the field of view)
+//     side    ≤ 50°  (peripheral: noticed, rarely disabling)
+//     outside > 50°  (behind or to the side: only when turning round)
+//   and flagged when it lies within --sun-mask-deg of the sun itself (then the
+//   sun dazzles anyway, and the reflection adds little).
+// Ground is flat (laser heights are above the local ground), and trees and
+// buildings between the panels and the eye are ignored: a worst case.
+// Glare intensity (retinal irradiance) is not modelled: a hit means "the
+// reflection reaches the eye", which for glass panels is a bright, brief flash.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,19 +50,36 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const args = process.argv.slice(2);
 const arg = (flag, fallback) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : fallback);
-const golfPath = args[0];
-if (!golfPath || golfPath.startsWith('--')) throw new Error('usage: glare.mjs <golf.geojson> --hole-way <id> [options]');
-const golf = JSON.parse(fs.readFileSync(golfPath, 'utf8'));
+if (!args.includes('--observers')) throw new Error('usage: glare.mjs --observers <points.geojson> [--panels kansli:W] [options]');
+const obsFile = JSON.parse(fs.readFileSync(arg('--observers'), 'utf8'));
 const roofs = JSON.parse(fs.readFileSync(arg('--roofs', path.join(ROOT, 'public/data/solar-roofs.json')), 'utf8'));
-const holeWay = Number(arg('--hole-way'));
-const buildingKey = arg('--building', 'kansli');
-const faceDirs = arg('--faces', 'W').split(',');
+const panelSpec = arg('--panels', 'kansli:W');
+const lookAt = arg('--look-at')?.split(',').map(Number);
 const year = Number(arg('--year', '2026'));
 const stepMin = Number(arg('--step-min', '5'));
-const spread = (Number(arg('--spread-deg', '0.5')) * Math.PI) / 180;
+const spreadDeg = Number(arg('--spread-deg', '0.5'));
+const sunMaskDeg = Number(arg('--sun-mask-deg', '15'));
 const eye = Number(arg('--eye-m', '1.6'));
 const outPath = arg('--out');
+const mmdd = (s) => s.split(':').map((x) => Number(x.replace('-', '')));
+const HIGH = mmdd(arg('--high', '06-01:08-31'));
+const SEASON = mmdd(arg('--season', '03-01:10-25'));
+const WEIGHTS = arg('--weights', '3,1,0').split(',').map(Number);
+const PERIODS = ['high', 'season', 'off'];
+const periodOf = (month, day) => {
+  const md = month * 100 + day;
+  if (md >= HIGH[0] && md <= HIGH[1]) return 0;
+  if (md >= SEASON[0] && md <= SEASON[1]) return 1;
+  return 2;
+};
+const arrays = args.flatMap((a, i) => (a === '--array' ? [args[i + 1]] : []));
 
+export const CLASSES = [
+  { key: 'central', maxDeg: 10, label: 'straight in the eyes' },
+  { key: 'near', maxDeg: 25, label: 'in the field of view' },
+  { key: 'side', maxDeg: 50, label: 'peripheral' },
+  { key: 'outside', maxDeg: 180, label: 'outside the view' },
+];
 const RAD = Math.PI / 180;
 const LAT = 56.53;
 const LON = 15.58;
@@ -63,8 +100,7 @@ function sun(t) {
   const cosAz = (Math.sin(decl) - Math.sin(la) * sinEl) / (Math.cos(la) * Math.cos(el));
   let az = Math.acos(Math.max(-1, Math.min(1, cosAz)));
   if (ha > 0) az = 2 * Math.PI - az;
-  // East, north, up.
-  return { el: el / RAD, v: [Math.sin(az) * Math.cos(el), Math.cos(az) * Math.cos(el), Math.sin(el)] };
+  return { el: el / RAD, v: [Math.sin(az) * Math.cos(el), Math.cos(az) * Math.cos(el), Math.sin(el)] }; // east, north, up
 }
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -72,184 +108,165 @@ const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const mul = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
 const norm = (a) => mul(a, 1 / Math.hypot(...a));
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const angleDeg = (a, b) => Math.acos(Math.max(-1, Math.min(1, dot(a, b)))) / RAD;
 
 // ---- the panels, in SWEREF 99 TM metres (east, north, height) ---------------
-const b = roofs.buildings.find((x) => x.key === buildingKey);
-if (!b) throw new Error(`no building ${buildingKey}`);
-const W = b.width;
-const H = b.height;
-const bytes = Buffer.from(b.heights_dm, 'base64');
-const hAt = (r, c) => (r >= 0 && r < H && c >= 0 && c < W ? bytes.readInt16LE((r * W + c) * 2) / 10 : 0);
-// Roof height at a point in cell units: the mean of the nearby roof cells.
-function roofHeight(cx, cy) {
-  let s = 0;
-  let n = 0;
-  for (let r = Math.floor(cy - 1); r <= Math.floor(cy); r += 1) {
-    for (let c = Math.floor(cx - 1); c <= Math.floor(cx); c += 1) {
-      const v = hAt(r, c);
-      if (v > 0) { s += v; n += 1; }
-    }
-  }
-  return n ? s / n : 0;
-}
-const toWorld = ([cx, cy]) => [b.origin[0] + cx * b.px, b.origin[1] - cy * b.px];
-const panels = [];
-for (const f of b.faces.filter((x) => x.panels > 0 && faceDirs.includes(x.direction))) {
-  const tilt = f.panel_tilt * RAD;
-  const az = f.azimuth * RAD;
-  const n = [Math.sin(az) * Math.sin(tilt), Math.cos(az) * Math.sin(tilt), Math.cos(tilt)];
-  for (const poly of f.panel_polygons) {
-    const corners = poly.map((p) => { const [e, nn] = toWorld(p); return [e, nn, roofHeight(p[0], p[1]) + RAIL]; });
-    // Panel plane through the corners' mean, with the face's normal; in-plane axes for the 2D test.
-    const c0 = mul(corners.reduce(add, [0, 0, 0]), 1 / 4);
+const faces = []; // { building, dir, n, c, radius, panels: [{ c0, u, v, flat }] }
+const compass = (az) => ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round((((az % 360) + 360) % 360) / 45) % 8];
+function addFace(building, dir, tilt, azimuth, polys) {
+  const n = [Math.sin(azimuth * RAD) * Math.sin(tilt * RAD), Math.cos(azimuth * RAD) * Math.sin(tilt * RAD), Math.cos(tilt * RAD)];
+  const panels = polys.map((corners) => {
+    const c0 = mul(corners.reduce(add, [0, 0, 0]), 1 / corners.length);
     const u = norm(sub(corners[1], corners[0]));
     const v = norm(cross(n, u));
     const flat = corners.map((p) => [dot(sub(p, c0), u), dot(sub(p, c0), v)]);
-    panels.push({ face: f.direction, n, c0, u, v, flat });
+    const s = flat.reduce((acc, p, i) => { const q = flat[(i + 1) % flat.length]; return acc + p[0] * q[1] - q[0] * p[1]; }, 0);
+    return { c0, u, v, flat, sign: Math.sign(s) || 1, corners };
+  });
+  const all = panels.flatMap((p) => p.corners);
+  const c = mul(all.reduce(add, [0, 0, 0]), 1 / all.length);
+  faces.push({ building, dir, tilt, azimuth, n, c, radius: Math.max(...all.map((p) => Math.hypot(...sub(p, c)))), panels });
+}
+for (const spec of arrays) {
+  const [name, nums] = spec.split(':');
+  const [e, nn, h, tilt, az, len, depth] = nums.split(',').map(Number);
+  const along = [Math.cos(az * RAD), -Math.sin(az * RAD), 0]; // horizontal, along the ridge
+  const up = [-Math.sin(az * RAD) * Math.cos(tilt * RAD), -Math.cos(az * RAD) * Math.cos(tilt * RAD), Math.sin(tilt * RAD)]; // up the slope
+  const C = [e, nn, h];
+  const corner = (a, b) => add(C, add(mul(along, (a * len) / 2), mul(up, (b * depth) / 2)));
+  addFace(name, compass(az), tilt, az, [[corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)]]);
+}
+for (const spec of panelSpec === 'none' ? [] : panelSpec.split(',')) {
+  const [key, dirs = ''] = spec.split(':');
+  const b = roofs.buildings.find((x) => x.key === key);
+  if (!b) throw new Error(`no building ${key} in solar-roofs.json`);
+  const bytes = Buffer.from(b.heights_dm, 'base64');
+  const hAt = (r, c) => (r >= 0 && r < b.height && c >= 0 && c < b.width ? bytes.readInt16LE((r * b.width + c) * 2) / 10 : 0);
+  const roofHeight = (cx, cy) => { // the mean of the roof cells around a point (cell units)
+    let s = 0;
+    let n = 0;
+    for (let r = Math.floor(cy - 1); r <= Math.floor(cy); r += 1) {
+      for (let c = Math.floor(cx - 1); c <= Math.floor(cx); c += 1) { const v = hAt(r, c); if (v > 0) { s += v; n += 1; } }
+    }
+    return n ? s / n : 0;
+  };
+  const wanted = dirs ? dirs.split('+').concat(dirs.split('|')) : null;
+  for (const f of b.faces.filter((x) => x.panels > 0 && (!wanted || wanted.includes(x.flat ? 'flat' : x.direction)))) {
+    addFace(key, f.flat ? 'flat' : f.direction, f.panel_tilt, f.azimuth,
+      f.panel_polygons.map((poly) => poly.map(([cx, cy]) => [b.origin[0] + cx * b.px, b.origin[1] - cy * b.px, roofHeight(cx, cy) + RAIL])));
   }
 }
-if (!panels.length) throw new Error('no panels on those faces');
-const faceNormal = panels[0].n;
+if (!faces.length) throw new Error(`no panels for ${panelSpec}`);
 
-// Point in a convex quad (2D), with a margin.
-function inside(q, [x, y], margin) {
-  for (let i = 0; i < 4; i += 1) {
+// Point in a convex polygon (2D, panel plane), with a margin.
+function inside(p, [x, y], margin) {
+  const q = p.flat;
+  for (let i = 0; i < q.length; i += 1) {
     const [x1, y1] = q[i];
-    const [x2, y2] = q[(i + 1) % 4];
-    const ex = x2 - x1;
-    const ey = y2 - y1;
-    const len = Math.hypot(ex, ey);
-    // Signed distance to the edge (positive inside for a counter-clockwise quad; take |orientation|).
-    const d = ((x - x1) * ey - (y - y1) * ex) / len;
-    q.sign ??= Math.sign(((q[2][0] - q[0][0]) * (q[1][1] - q[0][1]) - (q[2][1] - q[0][1]) * (q[1][0] - q[0][0])) || 1);
-    if (d * q.sign < -margin) return false;
+    const [x2, y2] = q[(i + 1) % q.length];
+    const d = ((x2 - x1) * (y - y1) - (y2 - y1) * (x - x1)) / Math.hypot(x2 - x1, y2 - y1);
+    if (d * p.sign < -margin) return false;
   }
   return true;
 }
 
-// ---- the hole and the observers --------------------------------------------
-const holeLine = golf.features.find((f) => f.properties.mvt_id === holeWay && f.properties.golf === 'hole');
-if (!holeLine) throw new Error(`no hole line with way id ${holeWay}`);
-const line = holeLine.geometry.coordinates;
-const distToLine = ([e, n]) => {
-  let best = Infinity;
-  for (let i = 1; i < line.length; i += 1) {
-    const [a0, a1] = line[i - 1];
-    const [b0, b1] = line[i];
-    const l2 = (b0 - a0) ** 2 + (b1 - a1) ** 2;
-    const t = Math.max(0, Math.min(1, ((e - a0) * (b0 - a0) + (n - a1) * (b1 - a1)) / l2));
-    best = Math.min(best, Math.hypot(e - (a0 + t * (b0 - a0)), n - (a1 + t * (b1 - a1))));
-  }
-  return best;
-};
-const ringOf = (f) => (f.geometry.type === 'Polygon' ? f.geometry.coordinates[0] : f.geometry.type === 'MultiPolygon' ? f.geometry.coordinates[0][0] : null);
-const centroid = (ring) => ring.reduce((s, p) => [s[0] + p[0] / ring.length, s[1] + p[1] / ring.length], [0, 0]);
-const tee = line[0];
-const pin = line.at(-1);
-const areas = golf.features.filter((f) => ['tee', 'green', 'fairway'].includes(f.properties.golf) && ringOf(f));
-const pick = (kind, test) => areas.filter((f) => f.properties.golf === kind && test(centroid(ringOf(f)), ringOf(f)));
-const holeAreas = [
-  ...pick('tee', (c) => Math.hypot(c[0] - tee[0], c[1] - tee[1]) < 45),
-  ...pick('green', (c) => Math.hypot(c[0] - pin[0], c[1] - pin[1]) < 30),
-  ...pick('fairway', (c, ring) => distToLine(c) < 35 && ring.some((p) => distToLine(p) < 25)),
-];
-function pointInRing([x, y], ring) {
-  let ok = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const [xi, yi] = ring[i];
-    const [xj, yj] = ring[j];
-    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) ok = !ok;
-  }
-  return ok;
-}
-const observers = [];
-const addObserver = (e, n, where) => observers.push({ e, n, where, minutes: 0, inView: 0, samples: [] });
-for (const f of holeAreas) {
-  const ring = ringOf(f);
-  const step = f.properties.golf === 'fairway' ? 8 : 4;
-  const es = ring.map((p) => p[0]);
-  const ns = ring.map((p) => p[1]);
-  for (let e = Math.min(...es); e <= Math.max(...es); e += step) {
-    for (let n = Math.min(...ns); n <= Math.max(...ns); n += step) if (pointInRing([e, n], ring)) addObserver(e, n, f.properties.golf);
-  }
-}
-for (let i = 1; i < line.length; i += 1) {
-  const [a0, a1] = line[i - 1];
-  const [b0, b1] = line[i];
-  const len = Math.hypot(b0 - a0, b1 - a1);
-  for (let s = 0; s < len; s += 5) addObserver(a0 + ((b0 - a0) * s) / len, a1 + ((b1 - a1) * s) / len, 'hole line');
-}
+// ---- the observers -------------------------------------------------------------
+const observers = obsFile.features.filter((f) => f.geometry?.type === 'Point').map((f) => {
+  const [e, n] = f.geometry.coordinates;
+  const { look_e: le, look_n: ln, ...props } = f.properties || {};
+  const target = lookAt || (le != null && ln != null ? [le, ln] : null);
+  const view = target ? norm([target[0] - e, target[1] - n, 0]) : null; // eye height to eye height: level
+  return { e, n, O: [e, n, eye], view, props, min: [0, 0, 0, 0], period: [0, 0, 0], masked: 0, days: new Set(), highDays: new Set(), first: null, last: null };
+});
+const tan = Math.tan(spreadDeg * RAD);
 
 // ---- the year ------------------------------------------------------------------
-const pad = (x) => String(x).padStart(2, '0');
-const swedish = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Stockholm', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-const byMonthHour = Array.from({ length: 12 }, () => new Array(24).fill(0));
-const events = []; // [time, observer index, glare direction az°, el°]
-let stepsWithGlare = 0;
+const swedish = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Stockholm', month: 'numeric', day: 'numeric', hour: 'numeric', hourCycle: 'h23' });
+const parts = (t) => Object.fromEntries(swedish.formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+const byMonthHour = Array.from({ length: 12 }, () => new Array(24).fill(0)); // minutes with glare in view (≤ 25°) at any observer
+let minutesAny = 0;
+let minutesInView = 0;
+const minutesByPeriod = [0, 0, 0]; // minutes with glare in someone's view, per period
 for (let t = Date.UTC(year, 0, 1); t < Date.UTC(year + 1, 0, 1); t += stepMin * 60_000) {
   const s = sun(t);
   if (s.el <= 0) continue;
-  const ns = dot(faceNormal, s.v);
-  if (ns <= 0) continue; // the sun is behind the panels
-  const r = sub(mul(faceNormal, 2 * ns), s.v); // reflected ray
-  if (r[2] >= 0.3) continue; // reflected steeply upwards: cannot reach eye height below the roof
+  const rays = faces.map((f) => { const ns = dot(f.n, s.v); return ns > 0 ? sub(mul(f.n, 2 * ns), s.v) : null; });
+  if (rays.every((r) => !r || r[2] > 0.5)) continue; // sun behind every face, or reflected steeply up
   let any = false;
-  observers.forEach((o, i) => {
-    const O = [o.e, o.n, eye];
-    for (const p of panels) {
-      const nr = dot(p.n, r);
-      if (nr <= 0) continue;
-      const tHit = dot(p.n, sub(O, p.c0)) / nr; // P = O − t r lies on the panel plane
-      if (tHit <= 0) continue;
-      const P = sub(O, mul(r, tHit));
-      const q = [dot(sub(P, p.c0), p.u), dot(sub(P, p.c0), p.v)];
-      if (!inside(p.flat, q, tHit * Math.tan(spread))) continue;
-      if (process.env.GLARE_DEBUG && !globalThis.debugged) {
-        globalThis.debugged = true;
-        console.log('DEBUG', { t: new Date(t).toISOString(), sun: s.v.map((x) => x.toFixed(3)), r: r.map((x) => x.toFixed(3)), O, P: P.map((x) => x.toFixed(2)), tHit: tHit.toFixed(2), q: q.map((x) => x.toFixed(2)), quad: p.flat.map((c) => c.map((x) => x.toFixed(2))), c0: p.c0.map((x) => x.toFixed(2)) });
+  let inView = false;
+  const p = parts(t);
+  const period = periodOf(Number(p.month), Number(p.day));
+  for (const o of observers) {
+    let hit = null;
+    faces.forEach((f, fi) => {
+      const r = rays[fi];
+      if (hit || !r) return;
+      // Quick test: does the line from the eye back along −r pass near the face at all?
+      const w = sub(f.c, o.O);
+      const along = -dot(w, r); // distance from the eye to the face along −r
+      if (along <= 0) return; // the face is not back along the ray
+      if (Math.hypot(...cross(w, r)) > f.radius + along * tan + 0.5) return;
+      for (const p of f.panels) {
+        const nr = dot(f.n, r);
+        if (nr <= 0) continue;
+        const tHit = dot(f.n, sub(o.O, p.c0)) / nr; // P = O − t·r lies on the panel's plane
+        if (tHit <= 0) continue;
+        const P = sub(o.O, mul(r, tHit));
+        if (inside(p, [dot(sub(P, p.c0), p.u), dot(sub(P, p.c0), p.v)], tHit * tan)) { hit = mul(r, -1); return; }
       }
-      // Hit: angle between the glare (from the eye towards P) and the view to the green.
-      const toP = [P[0] - o.e, P[1] - o.n];
-      const toPin = [pin[0] - o.e, pin[1] - o.n];
-      const angle = Math.abs(((Math.atan2(toP[0], toP[1]) - Math.atan2(toPin[0], toPin[1])) / RAD + 540) % 360 - 180);
-      o.minutes += stepMin;
-      if (angle <= 50) o.inView += stepMin;
-      if (o.samples.length < 400) o.samples.push(t);
-      const d = new Date(t);
-      byMonthHour[Number(swedish.formatToParts(d).find((x) => x.type === 'month').value) - 1][Number(swedish.formatToParts(d).find((x) => x.type === 'hour').value) % 24] += stepMin;
-      events.push([t, i, Math.round(angle)]);
-      any = true;
-      break;
+    });
+    if (!hit) continue;
+    const a = o.view ? angleDeg(hit, o.view) : 0;
+    const cls = CLASSES.findIndex((c) => a <= c.maxDeg);
+    o.min[cls] += stepMin;
+    if (angleDeg(hit, s.v) <= sunMaskDeg) o.masked += stepMin;
+    any = true;
+    if (cls <= 1) {
+      inView = true;
+      o.period[period] += stepMin;
+      o.days.add(`${p.month}-${p.day}`);
+      if (period === 0) o.highDays.add(`${p.month}-${p.day}`);
+      o.first ??= t;
+      o.last = t;
     }
-  });
-  if (any) stepsWithGlare += 1;
+  }
+  if (any) minutesAny += stepMin;
+  if (inView) {
+    minutesInView += stepMin;
+    minutesByPeriod[period] += stepMin;
+    byMonthHour[Number(p.month) - 1][Number(p.hour)] += stepMin;
+  }
 }
+const score = (o) => o.period.reduce((s, m, i) => s + m * WEIGHTS[i], 0);
 
 // ---- report --------------------------------------------------------------------
-const hit = observers.filter((o) => o.minutes > 0);
-const totalMin = stepsWithGlare * stepMin;
-console.log(`hole way ${holeWay}: ${observers.length} observer points (${holeAreas.length} areas: ${holeAreas.map((f) => f.properties.golf).join(', ')}); ${panels.length} panels on ${buildingKey} ${faceDirs.join('+')}, normal az ${Math.round((Math.atan2(faceNormal[0], faceNormal[1]) / RAD + 360) % 360)}°, tilt ${Math.round(Math.acos(faceNormal[2]) / RAD)}°`);
-console.log(`glare reaches some point of the hole in ${totalMin} min of ${year} (${(totalMin / 60).toFixed(1)} h); ${hit.length} of ${observers.length} points ever see it`);
-if (hit.length) {
-  const worst = [...hit].sort((a, b2) => b2.minutes - a.minutes).slice(0, 8);
-  for (const o of worst) {
-    const ds = o.samples.map((t) => swedish.format(new Date(t)));
-    console.log(`  ${o.where} at E ${Math.round(o.e)} N ${Math.round(o.n)} (${Math.round(distToLine([o.e, o.n]))} m from the hole line, ${Math.round(Math.hypot(o.e - pin[0], o.n - pin[1]))} m from the pin): ${o.minutes} min/yr, ${o.inView} min within 50° of the view to the green; first ${ds[0]}, last ${ds.at(-1)}`);
-  }
-  console.log('minutes per month (Swedish time) and hours:');
-  byMonthHour.forEach((hours, m) => {
-    const tot = hours.reduce((a, x) => a + x, 0);
-    if (tot) console.log(`  ${pad(m + 1)}: ${tot} min, hours ${hours.map((x, h) => (x ? `${pad(h)}:00 ${x}` : null)).filter(Boolean).join(', ')}`);
-  });
+const inViewMin = (o) => o.min[0] + o.min[1];
+const hit = observers.filter((o) => o.min.some((m) => m > 0));
+const fmt = (t) => new Date(t).toLocaleString('sv-SE', { timeZone: 'Europe/Stockholm', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+console.log(`${observers.length} observers; ${faces.reduce((s, f) => s + f.panels.length, 0)} panels: ${faces.map((f) => `${f.building} ${f.dir} (${f.panels.length}, tilt ${f.tilt}°, az ${Math.round(f.azimuth)}°)`).join(', ')}`);
+console.log(`${year}, every ${stepMin} min: glare reaches some observer in ${(minutesAny / 60).toFixed(1)} h, in someone's field of view (≤ 25°) in ${(minutesInView / 60).toFixed(1)} h`);
+console.log(`observers that ever see it: ${hit.length}; in the field of view: ${observers.filter((o) => inViewMin(o) > 0).length}; straight in the eyes (≤ 10°): ${observers.filter((o) => o.min[0] > 0).length}`);
+console.log(`hours with glare in someone's view: high season ${(minutesByPeriod[0] / 60).toFixed(1)}, rest of the season ${(minutesByPeriod[1] / 60).toFixed(1)}, off-season ${(minutesByPeriod[2] / 60).toFixed(1)} (weights ${WEIGHTS.join('/')})`);
+for (const o of [...observers].sort((a, b) => score(b) - score(a) || inViewMin(b) - inViewMin(a)).slice(0, 5).filter((o) => inViewMin(o) > 0)) {
+  console.log(`  E ${Math.round(o.e)} N ${Math.round(o.n)} ${JSON.stringify(o.props)}: ${o.min.join('/')} min (central/near/side/outside); in view ${o.period.join('/')} min (high/season/off), ${o.days.size} days (${o.highDays.size} in high season), ${fmt(o.first)} – ${fmt(o.last)}`);
 }
 if (outPath) {
   fs.writeFileSync(outPath, JSON.stringify({
-    year, stepMin, spreadDeg: Number(arg('--spread-deg', '0.5')), eyeM: eye, holeWay, building: buildingKey, faces: faceDirs,
-    note: 'Flat ground; trees and buildings between the panels and the hole ignored (worst case).',
-    totalMinutes: totalMin,
-    observers: observers.map((o) => ({ e: Math.round(o.e * 10) / 10, n: Math.round(o.n * 10) / 10, where: o.where, minutes: o.minutes, inView: o.inView })),
-    byMonthHour,
-    events: events.slice(0, 5000),
+    generated_by: 'tools/roof-solar/glare.mjs',
+    settings: { year, step_min: stepMin, spread_deg: spreadDeg, sun_mask_deg: sunMaskDeg, eye_m: eye, panels: panelSpec, arrays, look_at: lookAt || 'per observer', high: arg('--high', '06-01:08-31'), season: arg('--season', '03-01:10-25'), weights: WEIGHTS },
+    periods: PERIODS,
+    minutes_in_view_by_period: minutesByPeriod,
+    note: 'Flat ground; trees and buildings between the panels and the eye ignored (worst case). Intensity not modelled.',
+    attribution: obsFile.attribution || null,
+    classes: CLASSES,
+    faces: faces.map((f) => ({ building: f.building, dir: f.dir, tilt: f.tilt, azimuth: f.azimuth, panels: f.panels.length, centre: f.c.map((x) => Math.round(x * 10) / 10) })),
+    minutes_any: minutesAny,
+    minutes_in_view: minutesInView,
+    by_month_hour_in_view: byMonthHour,
+    // e, n; minutes per class [central, near, side, outside]; minutes in view (≤ 25°) per period [high, season, off];
+    // the weighted score; minutes beside the sun; days in view; of them in the high season; first/last in view (ms)
+    observer_fields: ['e', 'n', 'min', 'in_view', 'score', 'masked', 'days', 'high_days', 'first', 'last', 'props'],
+    observers: observers.map((o) => [Math.round(o.e * 10) / 10, Math.round(o.n * 10) / 10, o.min, o.period, score(o), o.masked, o.days.size, o.highDays.size, o.first, o.last, o.props]),
   }));
   console.log(`wrote ${outPath}`);
 }

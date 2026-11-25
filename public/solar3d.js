@@ -254,9 +254,94 @@ function label(text, scale = 1) {
   return sprite;
 }
 
+// ---- the golf course and glare (data/solar-site.json, tools/roof-solar/site-layers.mjs) ----
+// Recessive ground colours: the course is there to find one's way, not to read.
+const GOLF_COLORS = {
+  rough: 0xbccf9c, fairway: 0x9fcb7e, green: 0x74c05e, tee: 0x8cc46c, bunker: 0xeadfb2, sand: 0xeadfb2,
+  water: 0x93c2df, lateral_water_hazard: 0x93c2df, water_hazard: 0x93c2df, wetland: 0xa9c6b4,
+  forest: 0x7f9c6c, wood: 0x7f9c6c, scrub: 0x98ad80, grass: 0xc6d6a8, driving_range: 0xb2cf92,
+  building: 0xc9c3b8, clubhouse: 0xc9c3b8, parking: 0xd5d3cc, camp_site: 0xd3d9b8, pitch: 0xc6d6a8,
+};
+// Draw order, bottom to top, so overlapping areas never flicker.
+const GOLF_ORDER = ['camp_site', 'grass', 'driving_range', 'forest', 'wood', 'scrub', 'wetland', 'rough', 'fairway', 'water', 'lateral_water_hazard', 'water_hazard', 'tee', 'green', 'bunker', 'sand', 'parking', 'pitch', 'building', 'clubhouse'];
+// Glare in view: one hue, light → dark by the weighted minutes a year.
+export const GLARE_STEPS = [
+  { min: 0, color: 0xf9c784, label: 'under 30' },
+  { min: 30, color: 0xf08c3a, label: '30–120' },
+  { min: 120, color: 0xc8501a, label: '120–360' },
+  { min: 360, color: 0x7f2a0c, label: '360 or more' },
+];
+
+function golfLayer(site, e0, n0) {
+  const group = new THREE.Group();
+  const X = (e) => e - e0;
+  const Y = (n) => n - n0; // shape y; the mesh is turned flat so y becomes −z (north)
+  site.golf.areas
+    .map((a) => ({ ...a, order: Math.max(0, GOLF_ORDER.indexOf(a.k)) }))
+    .sort((a, b) => a.order - b.order)
+    .forEach((a) => {
+      const color = GOLF_COLORS[a.k];
+      if (color === undefined) return;
+      const shape = new THREE.Shape(a.rings[0].map(([e, n]) => new THREE.Vector2(X(e), Y(n))));
+      for (const r of a.rings.slice(1)) shape.holes.push(new THREE.Path(r.map(([e, n]) => new THREE.Vector2(X(e), Y(n)))));
+      const m = new THREE.Mesh(new THREE.ShapeGeometry(shape), new THREE.MeshLambertMaterial({ color, polygonOffset: true, polygonOffsetFactor: -1 - a.order, polygonOffsetUnits: -1 - a.order }));
+      m.rotation.x = -Math.PI / 2;
+      m.position.y = 0.02 + a.order * 0.004;
+      m.receiveShadow = true;
+      m.renderOrder = a.order;
+      group.add(m);
+    });
+  for (const l of site.golf.lines) {
+    const hole = l.k === 'hole';
+    const pts = l.pts.map(([e, n]) => new THREE.Vector3(X(e), hole ? 0.3 : 0.15, -Y(n)));
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), hole
+      ? new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: 6, gapSize: 4 })
+      : new THREE.LineBasicMaterial({ color: 0xa79a83 }));
+    if (hole) line.computeLineDistances();
+    group.add(line);
+  }
+  const cone = new THREE.ConeGeometry(2.2, 8, 7);
+  const treeMat = new THREE.MeshLambertMaterial({ color: 0x4f7a43 });
+  for (const [e, n] of site.golf.trees) {
+    const t = new THREE.Mesh(cone, treeMat);
+    t.position.set(X(e), 4, -Y(n));
+    t.castShadow = true;
+    group.add(t);
+  }
+  const pole = new THREE.CylinderGeometry(0.08, 0.08, 2.2, 6);
+  const flag = new THREE.MeshBasicMaterial({ color: 0xd62d20 });
+  for (const [e, n] of site.golf.pins) {
+    const p = new THREE.Mesh(pole, new THREE.MeshBasicMaterial({ color: 0xf2f2f2 }));
+    p.position.set(X(e), 1.1, -Y(n));
+    const f = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.6), flag);
+    f.position.set(X(e) + 0.45, 1.9, -Y(n));
+    group.add(p, f);
+  }
+  return group;
+}
+
+// Planned or possible buildings without laser data (the camping): plain boxes.
+function siteBuildings(list, e0, n0) {
+  const group = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: COLORS.wall, roughness: 0.9 });
+  for (const b of list) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(b.width, b.height, b.length), mat);
+    m.position.set(b.e - e0, b.height / 2, n0 - b.n);
+    m.rotation.y = -b.bearing * RAD;
+    m.castShadow = true;
+    group.add(m);
+    const tag = label(b.label, 1.6);
+    tag.position.set(b.e - e0, b.height + 6, n0 - b.n);
+    group.add(tag);
+  }
+  return group;
+}
+
 // Mounts the model in `container`. `selected` is a set of building keys whose
-// panels are shown; the others are drawn faded. Returns { select, dispose }.
-export function mountSolar3d(container, data, selected) {
+// panels are shown; the others are drawn faded. `site` (optional) adds the golf
+// course, the camping buildings and the glare layers. Returns
+// { select, dispose, setSun, setGlare, frame }.
+export function mountSolar3d(container, data, selected, site = null, extraBuildings = []) {
   const buildings = data.buildings.filter((b) => !b.error && b.heights_dm);
   const e0 = buildings.reduce((s, b) => s + b.e, 0) / buildings.length;
   const n0 = buildings.reduce((s, b) => s + b.n, 0) / buildings.length;
@@ -328,10 +413,69 @@ export function mountSolar3d(container, data, selected) {
     return p;
   }
 
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshStandardMaterial({ color: COLORS.ground, roughness: 1 }));
+  // The ground: the whole course when it is loaded, else the buildings' surroundings.
+  const box = site?.box || [e0 - 200, n0 - 200, e0 + 200, n0 + 200];
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(box[2] - box[0] + 100, box[3] - box[1] + 100), new THREE.MeshStandardMaterial({ color: COLORS.ground, roughness: 1 }));
   ground.rotation.x = -Math.PI / 2;
+  ground.position.set((box[0] + box[2]) / 2 - e0, 0, n0 - (box[1] + box[3]) / 2);
   ground.receiveShadow = true;
   scene.add(ground);
+  if (site?.golf) scene.add(golfLayer(site, e0, n0));
+  if (extraBuildings.length) scene.add(siteBuildings(extraBuildings, e0, n0));
+  for (const h of site?.holeLabels || []) {
+    const tag = label(h.label, 2);
+    tag.position.set(h.e - e0, 10, n0 - h.n);
+    scene.add(tag);
+  }
+
+  // Glare in view: a dot at eye height for each place, coloured by the
+  // weighted minutes a year; one run at a time (setGlare).
+  const glareGroup = new THREE.Group();
+  scene.add(glareGroup);
+  const glareFaces = new THREE.Group(); // the panels of a run without laser data, drawn as a plate
+  scene.add(glareFaces);
+  function setGlare(run, weights = [3, 1, 0]) {
+    glareGroup.clear();
+    glareFaces.clear();
+    if (!run) return null;
+    const F = Object.fromEntries(run.point_fields.map((k, i) => [k, i]));
+    const dot = new THREE.SphereGeometry(1.3, 10, 8);
+    const mats = GLARE_STEPS.map((s) => new THREE.MeshBasicMaterial({ color: s.color }));
+    for (const p of run.points) {
+      const w = p[F.in_view].reduce((s, m, i) => s + m * weights[i], 0);
+      const step = GLARE_STEPS.reduce((k, s, i) => (w >= s.min ? i : k), 0);
+      const m = new THREE.Mesh(dot, mats[step]);
+      m.position.set(p[F.e] - e0, 1.6, n0 - p[F.n]);
+      glareGroup.add(m);
+    }
+    for (const a of run.settings.arrays || []) {
+      const [, nums] = a.split(':');
+      const [e, n, h, tilt, az, len, depth] = nums.split(',').map(Number);
+      const plate = new THREE.Mesh(new THREE.PlaneGeometry(len, depth), new THREE.MeshStandardMaterial({ color: COLORS.panel, roughness: 0.3, metalness: 0.4, side: THREE.DoubleSide }));
+      plate.position.set(e - e0, h + 0.2, n0 - n);
+      plate.rotation.order = 'YXZ';
+      plate.rotation.y = Math.PI - az * RAD; // the plate's normal points to the azimuth, tilted up
+      plate.rotation.x = -Math.PI / 2 + tilt * RAD;
+      glareFaces.add(plate);
+    }
+    return run;
+  }
+
+  // Camera presets: 'buildings' (the default), 'site' (the whole course from
+  // above, from the south) or a point { e, n } to look at from 250 m.
+  function frame(where) {
+    if (where === 'buildings') return select(lastSelected);
+    if (where === 'site') {
+      const c = new THREE.Vector3((box[0] + box[2]) / 2 - e0, 0, n0 - (box[1] + box[3]) / 2);
+      controls.target.copy(c);
+      camera.position.copy(c).add(new THREE.Vector3(150, 900, 700));
+    } else {
+      const c = new THREE.Vector3(where.e - e0, 0, n0 - where.n);
+      controls.target.copy(c);
+      camera.position.copy(c).add(new THREE.Vector3(80, 160, 190));
+    }
+    controls.update();
+  }
   // A north arrow on the ground.
   const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 0, -1), new THREE.Vector3(-55, 0.2, 45), 14, 0x52514e, 4, 3);
   scene.add(arrow);
@@ -349,14 +493,16 @@ export function mountSolar3d(container, data, selected) {
     groups.set(b.key, g);
   }
 
-  const camera = new THREE.PerspectiveCamera(40, 1, 0.5, 1000);
+  const camera = new THREE.PerspectiveCamera(40, 1, 0.5, 4000);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.maxPolarAngle = Math.PI / 2.05;
   controls.minDistance = 10;
-  controls.maxDistance = 300;
+  controls.maxDistance = site ? 1600 : 300;
 
+  let lastSelected = selected;
   function select(keys) {
+    lastSelected = keys;
     const focus = new THREE.Vector3();
     let n = 0;
     for (const [key, g] of groups) {
@@ -405,5 +551,5 @@ export function mountSolar3d(container, data, selected) {
     renderer.dispose();
   }
   setSun(6, 21, 13);
-  return { select, dispose, setSun };
+  return { select, dispose, setSun, setGlare, frame };
 }

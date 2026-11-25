@@ -131,6 +131,47 @@ export const FEEDER_CABLE = {
   ],
 };
 
+// The feeder cables from the ground-mounted meter cabinet at the water
+// treatment plant, where the facility's single E.ON meter sits, as in the
+// club's energy analysis (v1.31, July 2026, §2: the single-line diagram by
+// Emmaboda Elteknik, 2021-04-15). Currents are guide values for buried
+// 0.6/1 kV cable; the real limit is the fuse and the installation method.
+// Materials marked ? are to be confirmed on the cable marking by the electrician.
+export const FEEDERS = {
+  source: 'Emmaboda GK energy analysis v1.31 (July 2026), §2 and §11; single-line diagram, Emmaboda Elteknik 2021-04-15',
+  mainFuseA: 125,
+  links: [
+    { key: 'incoming', label: 'Incoming feed (metered: Trafo-SD 630 / SEKI OB 400)', cable: 'N1XV 4×240', material: 'Al? (Cu: ~400 A)', amps: '~290 A', kw: '~200–277 kW' },
+    { key: 'clubhouse', label: 'Clubhouse distribution (office building, studio, restaurant)', cable: '4G240', material: 'Al?', amps: '~250 A (cable ~300 A)', kw: '~175–210 kW', lengthM: 160, ohm: 0.02 },
+    { key: 'camping', label: 'Central Camping (scout cabin, cabins, pitches, laundry)', cable: 'N1XV 4×240', material: 'Al?', amps: '~290 A (fused lower)', kw: '~200 kW', lengthM: 800, ohm: 0.1 },
+    { key: 'technical', label: 'Central Technical room (UV treatment, pumps)', cable: 'N1XV-AR 4G50', material: 'Al', amps: '~100 A (fuse)', kw: '~69 kW', lengthM: 250, ohm: 0.16 },
+    { key: 'irrigation', label: 'Irrigation', cable: 'AKKJ 3×150/41', material: 'Al', amps: '~200–250 A', kw: '~140–175 kW' },
+    { key: 'reserve', label: 'Clubhouse, reserve (marked “reserv”)', cable: 'FKKJ 3×25/16', material: 'Cu', amps: '50–63 A', kw: '~35–44 kW' },
+  ],
+  // The old office's cable from the office building: judged too weak by the
+  // electrician (it has tripped); a new aluminium cable is about to be laid (FEEDER_CABLE).
+  notes: [
+    'The bottleneck is the 125 A main fuse (~87 kW), not the cables: the incoming cable and the cabinet carry ~290–400 A.',
+    'The barn’s feed is not in the diagram (likely a sub-distribution from the clubhouse): confirm it before panels there.',
+    'The old office’s feed from the office building is too weak and has tripped: a new aluminium cable is being laid.',
+  ],
+};
+
+// Solar at the camping: the scout cabin and the three cabins. Their roofs are
+// outside the laser tile used for the other buildings (Lantmäteriet's
+// 62625_5350 is needed), so only the outline is known: centre, size and the
+// long side's bearing (from Lantmäteriet's building outlines). Their output
+// would reach the rest of the club through the 800 m camping feeder.
+export const CAMPING_SITES = [
+  { key: 'scout', label: 'Scout cabin (scoutstugan)', e: 536280, n: 6264722, length: 17.4, width: 5.3, height: 4, bearing: 12, areaM2: 92 },
+  { key: 'cabin1', label: 'Cabin', e: 536316, n: 6264791, length: 10.2, width: 9.1, height: 3.5, bearing: 3, areaM2: 92 },
+  { key: 'cabin2', label: 'Cabin', e: 536315, n: 6264775, length: 10.4, width: 9.0, height: 3.5, bearing: 3, areaM2: 94 },
+  { key: 'cabin3', label: 'Cabin', e: 536315, n: 6264757, length: 10.3, width: 9.0, height: 3.5, bearing: 3, areaM2: 93 },
+];
+
+// Hole numbers for the OSM hole lines (golfTiles keeps the way id, not the number).
+export const HOLE_NAMES = { 910875400: 'Hole 9' };
+
 // Each part, whether it can be negotiated, and how the club can lower it.
 export const BILL_PARTS = [
   { key: 'retail', label: 'Electricity contract (elhandel)', negotiable: 'yes', how: 'A free market: compare the surcharge (påslag) and fees on a spot-price contract with other retailers, or renegotiate with E.ON.' },

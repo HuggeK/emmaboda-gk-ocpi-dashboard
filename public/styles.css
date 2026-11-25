@@ -356,6 +356,9 @@ tbody tr:hover { background: var(--surface-2); }
 @media (max-width: 640px) { .solar-3d { height: 340px; } }
 .solar-sun { align-items: center; margin-top: 8px; }
 .solar-sun .chip .swatch { margin-right: 6px; }
+.glare-heat td, .glare-heat th { padding: 3px 4px; min-width: 22px; }
+.glare-heat td[style] { box-shadow: inset 0 0 0 1px var(--surface); }
+.glare-heat tr.glare-high td:first-child { border-left: 3px solid #c8501a; }
 .solar-sun .sun-time { display: inline-flex; align-items: center; gap: 6px; }
 .solar-sun .sun-time input[type="range"] { width: min(260px, 50vw); }
 

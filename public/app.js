@@ -17,7 +17,7 @@ import {
 import { DEFAULT_TARIFF, expandSeries, hourPrices, hourlySpot, meterHours, splitHours, dailyPeaks, monthlyMeter, summarize, seasonalPicture, rateFromMeter, monthlyTopHours, typicalDay } from './meter.js';
 import { FACILITY_LOADS, BASE_LOAD_KW, explainPeak, inHours, loadLabel } from './facility.js';
 import { DEFAULT_COSTS, MARKET_BAND, account, limitSavings, priceAdvice, winterCeilingCheck, nightOffCheck } from './economics.js';
-import { BILL, BILL_PARTS, BILL_SOURCE, FEEDER_CABLE, GRID_2027, ROOF_WORK, SOLAR_SIMULATION, billTotal } from './contracts.js';
+import { BILL, BILL_PARTS, BILL_SOURCE, CAMPING_SITES, FEEDERS, FEEDER_CABLE, GRID_2027, HOLE_NAMES, ROOF_WORK, SOLAR_SIMULATION, billTotal } from './contracts.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
@@ -2519,6 +2519,143 @@ function bindInstallerDownloads(data, buildings) {
   });
 }
 
+// ---- glare on the course (tools/roof-solar/glare.mjs → data/solar-site.json) ----
+// The high season (June–August, the most green-fee guests) counts three times,
+// the rest of the season once, the winter not at all. Same steps as the 3D
+// model's dots (solar3d.js GLARE_STEPS).
+const GLARE_WEIGHTS = [3, 1, 0];
+const GLARE_LEGEND = [
+  { min: 0, color: '#f9c784', label: 'under 30' },
+  { min: 30, color: '#f08c3a', label: '30–120' },
+  { min: 120, color: '#c8501a', label: '120–360' },
+  { min: 360, color: '#7f2a0c', label: '360+ min' },
+];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const holeName = (way) => HOLE_NAMES[way] || `the hole at OSM way ${way}`;
+
+function glareSummary(run) {
+  const F = Object.fromEntries(run.point_fields.map((k, i) => [k, i]));
+  const [high, season, off] = run.minutes_in_view_by_period.map((m) => m / 60);
+  const weighted = high * GLARE_WEIGHTS[0] + season * GLARE_WEIGHTS[1] + off * GLARE_WEIGHTS[2];
+  const byHole = new Map();
+  for (const p of run.points) {
+    const k = p[F.hole_way];
+    const h = byHole.get(k) || { pts: 0, high: 0, on: new Map() };
+    h.pts += 1;
+    h.high += p[F.in_view][0];
+    h.on.set(p[F.on], (h.on.get(p[F.on]) || 0) + 1);
+    byHole.set(k, h);
+  }
+  const where = [...byHole.entries()].sort((a, b) => b[1].high - a[1].high || b[1].pts - a[1].pts).slice(0, 3)
+    .map(([way, h]) => `${holeName(way)}: ${[...h.on.entries()].sort((a, b) => b[1] - a[1]).map(([on]) => on).slice(0, 2).join(', ')}`);
+  const months = MONTHS.filter((_, m) => run.by_month_hour_in_view[m].some((x) => x > 0));
+  const hours = Array.from({ length: 24 }, (_, h) => h).filter((h) => run.by_month_hour_in_view.some((row) => row[h] > 0));
+  const when = hours.length ? `${months[0]}–${months.at(-1)}, ${String(hours[0]).padStart(2, '0')}:00–${String(hours.at(-1) + 1).padStart(2, '0')}:00` : '–';
+  return { high, season, off, weighted, where, when, central: run.points.filter((p) => p[F.central] > 0).length };
+}
+
+function glareHeatmap(run) {
+  const hours = Array.from({ length: 17 }, (_, i) => i + 5); // 05–21
+  const max = Math.max(1, ...run.by_month_hour_in_view.flat());
+  const cell = (m) => {
+    if (!m) return '';
+    const step = m >= 60 ? 3 : m >= 20 ? 2 : m >= 5 ? 1 : 0;
+    return `background:${GLARE_LEGEND[step].color}`;
+  };
+  return `<div class="table-wrap"><table class="glare-heat">
+    <thead><tr><th>Month</th>${hours.map((h) => `<th class="num">${String(h).padStart(2, '0')}</th>`).join('')}<th class="num">Hours</th></tr></thead>
+    <tbody>${run.by_month_hour_in_view.map((row, m) => {
+      const high = m >= 5 && m <= 7;
+      const tot = row.reduce((a, x) => a + x, 0);
+      return `<tr class="${high ? 'glare-high' : ''}"><td>${high ? '<strong>' : ''}${MONTHS[m]}${high ? '</strong> <span class="subtle">high season</span>' : ''}</td>${hours.map((h) => `<td style="${cell(row[h])}" title="${MONTHS[m]} ${String(h).padStart(2, '0')}:00–${String(h + 1).padStart(2, '0')}:00: ${row[h]} min a year with glare in some golfer’s view"></td>`).join('')}<td class="num">${tot ? fmtNum(tot / 60, 1) : ''}</td></tr>`;
+    }).join('')}</tbody>
+  </table></div>
+  <div class="series-legend"><span class="subtle">Minutes a year in that clock hour (Swedish time), at any place on the course:</span>
+    ${['1–5', '5–20', '20–60', '60+'].map((l, i) => `<span><i class="swatch" style="background:${GLARE_LEGEND[i].color}"></i>${l}</span>`).join('')}
+    <span class="subtle">(max ${max} min)</span></div>`;
+}
+
+function solarGlareHtml(site, selected) {
+  const runs = site.glare.map((run) => ({ run, s: glareSummary(run) }));
+  const sel = runs.find((r) => r.run.key === selected) || runs[0];
+  const office = runs.find((r) => r.run.key.startsWith('office'));
+  const scout = runs.filter((r) => r.run.key.startsWith('scout'));
+  const best = scout.length ? [...scout].sort((a, b) => a.s.weighted - b.s.weighted)[0] : null;
+  return `<div class="card">
+    <div class="card-head"><h3>Glare: will the panels dazzle golfers?</h3><span class="subtle">the sun’s reflection in the panels, traced for every 5 minutes of ${esc(sel.run.settings.year)} to eye height (1.6 m) where golfers walk</span></div>
+    ${office ? `<div class="notice ${office.s.high > 5 ? 'warn' : ''}"><h3>${esc(office.run.label)}: ${fmtNum(office.s.high, 0)} hours in the high season</h3>
+      The west roof’s reflection reaches golfers’ view of the pin about <strong>${fmtNum(office.s.high, 0)} h in June–August</strong> (and ${fmtNum(office.s.season, 0)} h in the rest of the season), at ${office.run.points.length} places, ${office.s.central} of them straight in the eyes. Where: ${esc(office.s.where.join('; '))}. When: ${esc(office.s.when)}, near midday, when the course is busiest. For the green-fee guests this is the one to take seriously: leave the west roof without panels, or use anti-glare (matt, textured) glass there and ask the installer for its reflectance.</div>` : ''}
+    ${best ? `<div class="notice"><h3>The scout cabin: little glare whichever way the roof faces</h3>
+      Its roof has no laser data yet, so three possible slopes were tested (27° pitch, a 15 × 2.4 m array). In golfers’ view: ${scout.map((r) => `${esc(r.run.label.replace(/^Scout cabin, | \(if built\)$/g, ''))} ${fmtNum(r.s.high, 1)} h in the high season, ${fmtNum(r.s.season, 1)} h in the rest of the season`).join('; ')}. The <strong>${esc(best.run.label.replace(/^Scout cabin, | \(if built\)$/g, ''))}</strong> is the gentlest. What remains is mostly at the edge of the rough or far off, where trees between the cabin and the course (not in the model) would block much of it.</div>` : ''}
+    <div class="table-wrap"><table>
+      <thead><tr><th>Panels</th><th class="num">High season (Jun–Aug), h</th><th class="num">Rest of the season, h</th><th class="num">Winter, h</th><th class="num">Weighted, h</th><th class="num">Places (straight in the eyes)</th><th>Where</th><th>When</th></tr></thead>
+      <tbody>${runs.map(({ run, s }) => `<tr><td>${run.key === sel.run.key ? '<strong>' : ''}${esc(run.label)}${run.key === sel.run.key ? '</strong>' : ''}</td><td class="num"><strong>${fmtNum(s.high, 1)}</strong></td><td class="num">${fmtNum(s.season, 1)}</td><td class="num">${fmtNum(s.off, 1)}</td><td class="num">${fmtNum(s.weighted, 0)}</td><td class="num">${run.points.length} (${s.central})</td><td class="subtle">${esc(s.where.join('; ') || '–')}</td><td class="subtle">${esc(s.when)}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <h4>When it happens: ${esc(sel.run.label)}</h4>
+    <div id="solar-glare-heat">${glareHeatmap(sel.run)}</div>
+    <details><summary>How this is worked out, and what it leaves out</summary>
+      <p class="subtle">Where golfers walk: a 4 m grid within 40 m of each hole line from OpenStreetMap, without forest, water and buildings (tools/roof-solar/walkzone.mjs); on the tee, fairway and green or within 15 m of the line counts as “likely”, the rough further out as “possible”. Each place looks at its hole’s pin. Glare (tools/roof-solar/glare.mjs): the sun’s direction is mirrored in each panel; where the reflected ray reaches a place’s eye, the angle to the view towards the pin decides how bad it is: within 10° straight in the eyes, within 25° in the field of view (counted here), within 50° peripheral (not counted). Weighted hours: high season ×${GLARE_WEIGHTS[0]}, rest of the season (1 Mar – 25 Oct) ×${GLARE_WEIGHTS[1]}, winter ×${GLARE_WEIGHTS[2]}. A worst case: flat ground, a clear sky every day, and no trees or buildings in between; the brightness is not modelled (any panel glass reflects a few per cent of the sun, which is still dazzling, if brief). Run it again for another roof, hole or layout with the commands in tools/roof-solar/README.md.</p>
+    </details>
+  </div>`;
+}
+
+function bindGlareControls(s) {
+  const run = () => s.site.glare.find((g) => g.key === s.glare) || null;
+  s.view.setGlare(run(), GLARE_WEIGHTS);
+  // ?frame=site or ?frame=E,N opens the model there (for links and screenshots).
+  const start = new URLSearchParams(location.search).get('frame');
+  if (start) s.view.frame(start.includes(',') ? { e: Number(start.split(',')[0]), n: Number(start.split(',')[1]) } : start);
+  $('#solar-glare')?.addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-glare]');
+    if (!chip) return;
+    s.glare = chip.dataset.glare || null;
+    for (const c of $$('#solar-glare .chip')) c.classList.toggle('active', c === chip);
+    const r = run();
+    s.view.setGlare(r, GLARE_WEIGHTS);
+    if (r && $('#solar-glare-heat')) $('#solar-glare-heat').innerHTML = glareHeatmap(r);
+    if (r) {
+      const F = Object.fromEntries(r.point_fields.map((k, i) => [k, i]));
+      const pts = r.points.length ? r.points : [[CAMPING_SITES[0].e, CAMPING_SITES[0].n]];
+      s.view.frame({ e: pts.reduce((a, p) => a + p[F.e], 0) / pts.length, n: pts.reduce((a, p) => a + p[F.n], 0) / pts.length });
+    }
+  });
+  $('#solar-frame')?.addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-frame]');
+    if (!chip) return;
+    const f = chip.dataset.frame;
+    s.view.frame(f === 'camping' ? { e: CAMPING_SITES[0].e + 20, n: CAMPING_SITES[0].n + 30 } : f);
+  });
+}
+
+// ---- the feeder cables and the losses in them -------------------------------
+// Loss in a three-phase cable: 3·I²·R with I = P / (√3 · 400 V) (an inverter
+// runs at cos φ ≈ 1); R per conductor from the energy analysis (aluminium).
+const cableLossW = (kw, ohm) => 3 * ((kw * 1000) / (Math.sqrt(3) * 400)) ** 2 * ohm;
+
+function feedersHtml() {
+  const camping = FEEDERS.links.find((l) => l.key === 'camping');
+  const club = FEEDERS.links.find((l) => l.key === 'clubhouse');
+  const sizes = [5, 10, 20, 30];
+  return `<div class="card">
+    <div class="card-head"><h3>The cables between the buildings</h3><span class="subtle">from the ground cabinet at the water treatment plant, where the club’s one E.ON meter is</span></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Feeder</th><th>Cable</th><th>Conductor</th><th class="num">Current (buried)</th><th class="num">≈ Power, 400 V 3-phase</th><th class="num">Length</th></tr></thead>
+      <tbody>${FEEDERS.links.map((l) => `<tr><td>${esc(l.label)}</td><td class="mono">${esc(l.cable)}</td><td>${esc(l.material)}</td><td class="num">${esc(l.amps)}</td><td class="num">${esc(l.kw)}</td><td class="num">${l.lengthM ? `~${l.lengthM} m` : ''}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <ul>${FEEDERS.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>
+    <h4>Solar at the camping: the scout cabin and the cabins</h4>
+    <p>Panels there feed the camping’s own board first (the laundry, the pitches, the cabins’ heating); only what the camping does not use at that moment travels the ~${camping.lengthM} m back to the ground cabinet and on to the clubhouse, losing a little on the way. The camping feeder is thick (${esc(camping.cable)}, about ${fmtNum(camping.ohm, 2)} Ω per conductor), so the loss is small; the office building’s ${esc(club.cable)} over ${club.lengthM} m loses a fifth of that.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th class="num">Solar power sent through the cable</th>${sizes.map((kw) => `<th class="num">${kw} kW</th>`).join('')}</tr></thead>
+      <tbody>
+        <tr><td>Camping → ground cabinet (${camping.lengthM} m)</td>${sizes.map((kw) => `<td class="num">${fmtNum(cableLossW(kw, camping.ohm), 0)} W (${fmtNum((cableLossW(kw, camping.ohm) / (kw * 10)), 1)} %)</td>`).join('')}</tr>
+        <tr><td>Ground cabinet → office building (${club.lengthM} m)</td>${sizes.map((kw) => `<td class="num">${fmtNum(cableLossW(kw, club.ohm), 0)} W (${fmtNum((cableLossW(kw, club.ohm) / (kw * 10)), 1)} %)</td>`).join('')}</tr>
+      </tbody>
+    </table></div>
+    <p class="subtle">At full output; over a year the loss is roughly half of that percentage, since panels mostly run well below their peak (the loss grows with the square of the power). A camping plant’s surplus goes camping → ground cabinet → clubhouse, so both rows apply to it; panels on the office building are used right there by the restaurant and the clubhouse, so almost none of their output travels a feeder at all. The cabins’ distance to the camping board is not in the analysis: a long thin cable from a cabin to the board would matter more than the thick feeder. Their roofs are outside the laser data used so far: Lantmäteriet’s tile 62625_5350 is needed to lay out panels there. Cables, lengths and materials: ${esc(FEEDERS.source)}; to be verified by the electrician.</p>
+  </div>`;
+}
+
 async function renderSolar() {
   const root = $('#view-solar');
   state.solar ||= { show: 'suggested', data: null, view: null, sunDay: 'summer', sunHour: 13 };
@@ -2537,6 +2674,11 @@ async function renderSolar() {
   if (s.effekt === undefined) {
     // The per-roof simulation (tools/roof-solar → data/solar-effekt.json); optional.
     s.effekt = await fetch('data/solar-effekt.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  }
+  if (s.site === undefined) {
+    // The golf course (OpenStreetMap) and the glare runs (tools/roof-solar/site-layers.mjs); optional.
+    s.site = await fetch('data/solar-site.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    s.glare ??= s.site?.glare?.[0]?.key || null;
   }
   const buildings = s.data.buildings.filter((b) => !b.error);
   const pick = (keys) => buildings.filter((b) => keys.includes(b.key));
@@ -2593,7 +2735,24 @@ async function renderSolar() {
         <button id="solar-sun-play" title="Run through the day">▶ Day</button>
         <span id="solar-sun-readout" class="subtle"></span>
       </div>
+      ${s.site ? `<div class="filters solar-sun" id="solar-frame">
+        <span class="subtle">View:</span>
+        <button class="chip" data-frame="buildings">The buildings</button>
+        <button class="chip" data-frame="site">The whole course</button>
+        <button class="chip" data-frame="camping">The camping</button>
+      </div>
+      <div class="filters solar-sun" id="solar-glare">
+        <span class="subtle">Glare in golfers’ view:</span>
+        <button class="chip ${!s.glare ? 'active' : ''}" data-glare="">Off</button>
+        ${s.site.glare.map((g) => `<button class="chip ${s.glare === g.key ? 'active' : ''}" data-glare="${esc(g.key)}">${esc(g.label)}</button>`).join('')}
+      </div>
+      <div class="series-legend">
+        <span class="subtle">Dots: places where the reflection comes within 25° of the view to the pin, weighted minutes a year (high season ×${GLARE_WEIGHTS[0]}, rest of the season ×${GLARE_WEIGHTS[1]}):</span>
+        ${GLARE_LEGEND.map((g) => `<span><i class="swatch" style="background:${g.color}"></i>${esc(g.label)}</span>`).join('')}
+        <span class="subtle">Dashed white: the hole lines. ${esc(s.site.attribution)}.</span>
+      </div>` : ''}
     </div>
+    ${s.site?.glare?.length ? solarGlareHtml(s.site, s.glare) : ''}
     <div class="card">
       <div class="card-head"><h3>Per building</h3><span class="subtle">${fmtNum(s.data.panel.wp, 0)} Wp panels, ${fmtNum(s.data.panel.w, 2)} × ${fmtNum(s.data.panel.h, 2)} m, ${fmtNum(s.data.panel.setback_m, 1)} m from the roof edges</span></div>
       <div class="table-wrap"><table>
@@ -2611,6 +2770,7 @@ async function renderSolar() {
     </div>
     ${s.effekt ? solarEffektHtml(s.effekt, buildings, valueOf) : ''}
     ${roofWorkHtml(buildings, valueOf)}
+    ${feedersHtml()}
     <div class="card">
       <div class="card-head"><h3>What size pays best</h3><span class="subtle">simulated on the club’s measured consumption, ${esc(SOLAR_SIMULATION.period)}</span></div>
       <div class="table-wrap"><table>
@@ -2646,8 +2806,16 @@ async function renderSolar() {
   try {
     const { mountSolar3d } = await import('./solar3d.js');
     s.view?.dispose();
-    s.view = mountSolar3d($('#solar-3d'), s.data, new Set(s.show === 'all' ? buildings.map((b) => b.key) : SUGGESTED_ROOFS));
+    const site = s.site && {
+      ...s.site,
+      holeLabels: s.site.golf.lines.filter((l) => l.k === 'hole' && HOLE_NAMES[l.way]).map((l) => {
+        const [e, n] = l.pts[Math.floor(l.pts.length / 2)];
+        return { label: HOLE_NAMES[l.way], e, n };
+      }),
+    };
+    s.view = mountSolar3d($('#solar-3d'), s.data, new Set(s.show === 'all' ? buildings.map((b) => b.key) : SUGGESTED_ROOFS), site, site ? CAMPING_SITES : []);
     bindSunControls(s);
+    if (site) bindGlareControls(s);
   } catch (err) {
     $('#solar-3d').innerHTML = `<div class="notice warn">The 3D model could not load (${esc(err.message)}). It needs an internet connection for three.js; the tables above have the same numbers.</div>`;
   }

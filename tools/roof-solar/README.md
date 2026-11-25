@@ -70,6 +70,38 @@ STRÅNG. It writes `public/data/solar-effekt.json`; `--sizes <file>` also
 writes the generic east/west sizes for `SOLAR_SIMULATION` in
 `public/contracts.js`.
 
+## 2c. Glare on the course, and the course in the 3D model
+
+Three steps, each a plain Node script; nothing is judged by hand. The golf
+course comes from OpenStreetMap via [golfTiles](https://github.com/HuggeK/golfTiles),
+extracted to a GeoJSON in SWEREF 99 TM (`golf.geojson` below).
+
+```powershell
+# 1. Where golfers walk: eye positions every 4 m within 40 m of each hole line,
+#    without forest, water and buildings; each looks at its hole's pin.
+node tools\roof-solar\walkzone.mjs golf.geojson --hole-way 910875400 --out h9.geojson
+
+# 2. Glare: the sun's reflection in the panels traced every 5 minutes of a year
+#    to those eyes, classified by the angle to the view (≤ 10° straight in the
+#    eyes, ≤ 25° in the field of view, ≤ 50° peripheral) and by period
+#    (high season Jun–Aug ×3, rest of the season ×1, winter ×0).
+node tools\roof-solar\glare.mjs --observers h9.geojson --panels kansli:W --out glare-office-w.json
+#    A roof without laser data: a planned array, centre E,N, height, tilt, azimuth, length, depth.
+node tools\roof-solar\glare.mjs --observers camping.geojson --panels none `
+    --array scout-W:536280,6264722,3.5,27,282,15,2.4 --out glare-scout-w.json
+
+# 3. Pack the course and the glare runs for the Solar tab (public/data/solar-site.json).
+node tools\roof-solar\site-layers.mjs golf.geojson `
+    --glare "office-w|Office building, west roof (planned)|glare-office-w.json" `
+    --glare "scout-w|Scout cabin, west slope (if built)|glare-scout-w.json"
+```
+
+`--observers` takes any GeoJSON points (a terrace, a road, windows), with
+`look_e`/`look_n` per point or `--look-at E,N` for all. The model is a worst
+case: flat ground, a clear sky every day, no trees or buildings in between, and
+no brightness model. The output keeps the OpenStreetMap attribution (ODbL),
+which the Solar tab shows under the model.
+
 ## 3. Look at it
 
 ```powershell

@@ -8,8 +8,9 @@
 //
 // --observers: GeoJSON points in SWEREF 99 TM (EPSG:3006), one per eye
 //   position; e.g. from walkzone.mjs (where golfers walk on a hole), or any
-//   hand-made set (a terrace, a road, a window). A point's look_e/look_n
-//   properties say where that person looks (a hole's pin); --look-at sets one
+//   hand-made set (a terrace, a road, a window). A point's `looks` ([[E, N], ...],
+//   e.g. the pin, the line of play ahead and the walking direction; the one
+//   nearest the glare counts) or look_e/look_n say where that person looks; --look-at sets one
 //   target for all; with neither, every direction counts as "in view".
 //   Other properties are passed through to the output.
 // --panels: building key and roof faces (N, NE, E, SE, S, SW, W, NW, flat)
@@ -173,10 +174,12 @@ function inside(p, [x, y], margin) {
 // ---- the observers -------------------------------------------------------------
 const observers = obsFile.features.filter((f) => f.geometry?.type === 'Point').map((f) => {
   const [e, n] = f.geometry.coordinates;
-  const { look_e: le, look_n: ln, ...props } = f.properties || {};
-  const target = lookAt || (le != null && ln != null ? [le, ln] : null);
-  const view = target ? norm([target[0] - e, target[1] - n, 0]) : null; // eye height to eye height: level
-  return { e, n, O: [e, n, eye], view, props, min: [0, 0, 0, 0], period: [0, 0, 0], masked: 0, days: new Set(), highDays: new Set(), first: null, last: null };
+  const { look_e: le, look_n: ln, looks, ...props } = f.properties || {};
+  // Where the person looks: --look-at, else the point's looks (several: the
+  // nearest one to the glare counts), else look_e/look_n. Level views.
+  const targets = lookAt ? [lookAt] : looks?.length ? looks : le != null && ln != null ? [[le, ln]] : [];
+  const views = targets.filter(([te, tn]) => Math.hypot(te - e, tn - n) > 1).map(([te, tn]) => norm([te - e, tn - n, 0]));
+  return { e, n, O: [e, n, eye], views, props, min: [0, 0, 0, 0], period: [0, 0, 0], masked: 0, days: new Set(), highDays: new Set(), first: null, last: null };
 });
 const tan = Math.tan(spreadDeg * RAD);
 
@@ -216,7 +219,7 @@ for (let t = Date.UTC(year, 0, 1); t < Date.UTC(year + 1, 0, 1); t += stepMin * 
       }
     });
     if (!hit) continue;
-    const a = o.view ? angleDeg(hit, o.view) : 0;
+    const a = o.views.length ? Math.min(...o.views.map((v) => angleDeg(hit, v))) : 0;
     const cls = CLASSES.findIndex((c) => a <= c.maxDeg);
     o.min[cls] += stepMin;
     if (angleDeg(hit, s.v) <= sunMaskDeg) o.masked += stepMin;

@@ -15,8 +15,12 @@
 //            (where most golfers walk), 0 for rough and open ground further out
 //   along_m  distance along the hole from the tee
 //   off_m    distance from the hole line
-//   look_e, look_n   where the golfer looks: the pin (golf=pin near the green
-//            end of the hole line, else the end of the line)
+//   looks    where the golfer looks, [[E, N], ...]: the pin (golf=pin near the
+//            green end of the hole line, else the end of the line), the line of
+//            play --ahead-m further along the hole (the next shot's target), and
+//            the walking direction (the hole's direction where the golfer is,
+//            projected from the golfer). glare.mjs counts glare near any of them.
+//   look_e, look_n   the pin alone (for tools that take one target)
 // Points in forest, water, wetland and buildings are left out: nobody walks there.
 import fs from 'node:fs';
 
@@ -29,6 +33,7 @@ const holeWays = String(arg('--hole-way')).split(',');
 const CORRIDOR = Number(arg('--corridor-m', '40'));
 const LIKELY = Number(arg('--likely-m', '15'));
 const STEP = Number(arg('--step-m', '4'));
+const AHEAD = Number(arg('--ahead-m', '150'));
 const outPath = arg('--out');
 
 const BLOCKED = ['forest', 'wood', 'scrub', 'lateral_water_hazard', 'water_hazard', 'wetland', 'water'];
@@ -69,6 +74,22 @@ function walkZone(holeWay) {
     }
     return { d: best, along, total: acc };
   };
+  // The point s metres along the line, and the line's direction there.
+  const at = (s) => {
+    let acc = 0;
+    for (let i = 1; i < line.length; i += 1) {
+      const [ax, ay] = line[i - 1];
+      const [bx, by] = line[i];
+      const L = Math.hypot(bx - ax, by - ay);
+      if (L && (acc + L >= s || i === line.length - 1)) {
+        const t = Math.max(0, Math.min(1, (s - acc) / L));
+        return { p: [ax + t * (bx - ax), ay + t * (by - ay)], dir: [(bx - ax) / L, (by - ay) / L] };
+      }
+      acc += L;
+    }
+    return { p: line.at(-1), dir: [0, 1] };
+  };
+  const r1 = (x) => Math.round(x * 10) / 10;
   const es = line.map((p) => p[0]);
   const ns = line.map((p) => p[1]);
   const box = [Math.min(...es) - CORRIDOR, Math.min(...ns) - CORRIDOR, Math.max(...es) + CORRIDOR, Math.max(...ns) + CORRIDOR];
@@ -99,10 +120,13 @@ function walkZone(holeWay) {
       const hits = play.filter((a) => inPoly(p, a.poly)).map((a) => a.k);
       const on = PLAY.find((k) => hits.includes(k))?.replace('sand', 'bunker') || 'other';
       const likely = ['fairway', 'tee', 'green'].includes(on) || d <= LIKELY ? 1 : 0;
+      const ahead = at(along + AHEAD).p;
+      const { dir } = at(along);
+      const looks = [pin, ahead, [x + dir[0] * 50, y + dir[1] * 50]].map(([e, n]) => [r1(e), r1(n)]);
       out.push({
         type: 'Feature',
         geometry: { type: 'Point', coordinates: p },
-        properties: { hole_way: Number(holeWay), on, likely, along_m: Math.round(along), off_m: Math.round(d), look_e: pin[0], look_n: pin[1] },
+        properties: { hole_way: Number(holeWay), on, likely, along_m: Math.round(along), off_m: Math.round(d), look_e: pin[0], look_n: pin[1], looks },
       });
     }
   }

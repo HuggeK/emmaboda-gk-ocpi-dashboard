@@ -34,6 +34,18 @@ const snapPath = args[0];
 if (!snapPath || snapPath.startsWith('--')) throw new Error('usage: simulate.mjs <snapshot.json> [options]');
 const snap = JSON.parse(fs.readFileSync(snapPath, 'utf8'));
 const roofs = JSON.parse(fs.readFileSync(arg('--roofs', path.join(ROOT, 'public/data/solar-roofs.json')), 'utf8'));
+// --exclude kansli:W,studio: leave out roof faces (building:direction) or whole
+// buildings, e.g. a roof that may not get panels (glare, load capacity).
+for (const spec of (arg('--exclude') || '').split(',').filter(Boolean)) {
+  const [key, dir] = spec.split(':');
+  const b = roofs.buildings.find((x) => x.key === key);
+  if (!b) throw new Error(`--exclude: no building ${key}`);
+  if (!dir) { roofs.buildings = roofs.buildings.filter((x) => x !== b); continue; }
+  for (const f of b.faces.filter((x) => (x.flat ? 'flat' : x.direction) === dir)) {
+    b.kwp -= f.kwp; b.kwh_year -= f.kwh_year; b.panels -= f.panels;
+    f.panels = 0; f.kwp = 0; f.kwh_year = 0;
+  }
+}
 const spot = arg('--spot') ? JSON.parse(fs.readFileSync(arg('--spot'), 'utf8')) : snap.spot;
 if (!spot?.values) throw new Error('no spot prices: the snapshot has none, pass --spot');
 const outPath = arg('--out', path.join(ROOT, 'public/data/solar-effekt.json'));

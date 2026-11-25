@@ -302,6 +302,17 @@ async function renderNow() {
   const typical = hours.size ? typicalLoadByHour(hours, now) : null;
   const lastMeter = hours.size ? Math.max(...hours.keys()) + 3_600_000 : null;
   const krPerKw = krPerKwAt(now);
+  // What the peak hour was: the meter sees the whole facility, the chargers
+  // included; their share is estimated from the charge records, as on the
+  // Meter tab, and the rest is matched to the energy analysis's loads.
+  let peakWhy = null;
+  if (peak) {
+    const chargerKw = Math.min(peak.kw, hourlyProfile(inputs.records || [], state.analysis.options).get(peak.at)?.kw || 0);
+    const why = explainPeak({ at: peak.at, meterKw: peak.kw, chargerKw }, { isWinter });
+    const SV_LOADS = { irrigation: 'bevattningspumparna', daytime: 'klubbhus, restaurang, camping och golfbilsladdning', heating: 'uppvärmningen (elvärme och värmepumpar)', base: 'grundlasten (kyl, frys, pumpar, belysning)', unexplained: 'ingen tydlig last enligt energianalysen' };
+    const others = why.causes.filter((c) => c.key !== 'chargers').map((c) => SV_LOADS[c.key] || c.key);
+    peakWhy = { chargerKw, restKw: peak.kw - chargerKw, others };
+  }
   if (!quarters.length) {
     root.innerHTML = `<div class="view-head"><h2>Elpris nu</h2></div><div class="notice warn"><h3>Inga kommande priser</h3>Spotpriserna för de närmaste timmarna finns inte i datat ännu. Morgondagens priser publiceras runt kl. 13.</div>`;
     return;
@@ -332,7 +343,7 @@ async function renderNow() {
     <div class="now-tiles">
       <div class="card tile"><div class="label">Pris just nu (${svTime(cur.at)}–${svTime(cur.at + 15 * 60_000)})</div><div class="value">${svNum(cur.totalOre / 100, 2)} kr/kWh</div><div class="hint"><i class="swatch" style="background:${levelOf(cur.totalOre).color}"></i> ${levelOf(cur.totalOre).label} · exkl. moms</div></div>
       ${cheap3 ? `<div class="card tile"><div class="label">Billigaste 3 timmarna framåt</div><div class="value">${svTime(cheap3.start)}–${svTime(cheap3.end)}</div><div class="hint">${esc(svDay(cheap3.start))} · snitt ${svNum(cheap3.meanOre / 100, 2)} kr/kWh</div></div>` : ''}
-      ${peak ? `<div class="card tile"><div class="label">Månadens högsta timme hittills</div><div class="value">${svNum(peak.kw, 1)} kW</div><div class="hint">${esc(svDay(peak.at))} kl. ${svTime(peak.at)}: håll varje timme under detta</div></div>` : ''}
+      ${peak ? `<div class="card tile"><div class="label">Månadens högsta timme hittills</div><div class="value">${svNum(peak.kw, 1)} kW</div><div class="hint">${esc(svDay(peak.at))} kl. ${svTime(peak.at)}–${svTime(peak.at + 3_600_000)}: ${peakWhy && peakWhy.chargerKw >= 0.5 ? `anläggningen ${svNum(peakWhy.restKw, 1)} kW + elbilsladdning ${svNum(peakWhy.chargerKw, 1)} kW (uppskattad)` : 'anläggningen själv, ingen elbilsladdning'}. Håll varje timme under detta</div></div>` : ''}
       <div class="card tile"><div class="label">Varje kW över toppen kostar</div><div class="value">${svNum(krPerKw, 0)} kr</div><div class="hint">i effektavgift för månaden (exkl. moms)</div></div>
     </div>
     <div class="card">
@@ -341,6 +352,11 @@ async function renderNow() {
       <div class="series-legend">${PRICE_LEVELS.map((l) => `<span><i class="swatch" style="background:${l.color}"></i>${l.label}</span>`).join('')}<span class="subtle">Billigt = billigaste tredjedelen av kvartarna som visas, dyrt = dyraste tredjedelen. Håll muspekaren över en stapel för exakt pris.</span></div>
       <p><strong>Vad kostar en kWh ovanpå spotpriset?</strong> Just nu ${svNum(onTop, 0)} öre/kWh: E.ON:s påslag och avgifter ${svNum(cur.retailOre, 0)} öre (påslaget i avtalet är ${svNum(RETAIL_CONTRACT.surchargeOre, 0)} öre, resten är andra avgifter per kWh på fakturan), nätets energiavgift ${svNum(cur.transferOre, 1)} öre${isGrid2027 ? ` (${svNum(GRID_2027.energyOre, 1)} öre + ${svNum(GRID_2027.energySpotPct, 1)} % av spotpriset)` : ` (från 2027: ${svNum(GRID_2027.energyOre, 1)} öre + ${svNum(GRID_2027.energySpotPct, 1)} % av spotpriset)`} och energiskatt ${svNum(cur.taxOre, 0)} öre. Spotpriset just nu: ${svNum(cur.spotOre, 0)} öre. Priset sätts per kvart, så det lönar sig att flytta det som går att flytta till de billiga kvartarna.</p>
     </div>
+    ${peak && peakWhy ? `<div class="card">
+      <h3>Vad var månadens topp?</h3>
+      <p>${esc(svDay(peak.at))} kl. ${svTime(peak.at)}–${svTime(peak.at + 3_600_000)} drog anläggningen i snitt <strong>${svNum(peak.kw, 1)} kW</strong> enligt E.ON:s mätare. Mätaren ser allt bakom huvudsäkringen, laddboxarna inräknade: ${peakWhy.chargerKw >= 0.5 ? `elbilsladdningen stod för uppskattningsvis <strong>${svNum(peakWhy.chargerKw, 1)} kW</strong> (från laddsessionerna hos ChargeNode) och resten av anläggningen för <strong>${svNum(peakWhy.restKw, 1)} kW</strong>` : `ingen elbil laddade den timmen, så hela toppen var <strong>anläggningen själv</strong>`}. Det som passar tid och årstid enligt energianalysen: ${esc(peakWhy.others.join(', '))}. Grundlasten ligger kring ${svNum(BASE_LOAD_KW, 0)} kW dygnet runt.</p>
+      <p class="subtle">Laddningens andel är en uppskattning: laddsessionerna ger när en bil var inkopplad och hur mycket den laddade, inte exakt effekt minut för minut. Allt annat är inte mätt separat, så ”passar” betyder att tid och storlek stämmer, inte att det är uppmätt.</p>
+    </div>` : ''}
     ${peak && typical ? `<div class="card">
       <div class="card-head"><h3>Timme för timme: pris och utrymme under månadens topp</h3><span class="subtle">utrymme = månadens topp (${svNum(peak.kw, 1)} kW) minus vad anläggningen brukar dra den timmen en hög dag</span></div>
       <div class="table-wrap"><table>

@@ -340,7 +340,7 @@ async function renderNow() {
   const tightest = rows.filter((r) => r.room !== null).sort((a, b) => a.room - b.room)[0];
   root.innerHTML = `
     <div class="view-head"><h2>Elpris nu</h2><span class="subtle">För personalen: när el är billig, och hur vi undviker att höja månadens effektavgift</span></div>
-    <div class="notice"><h3>Priser och snabba fakta om ${esc(new Date(now).toLocaleDateString('sv-SE', { timeZone: 'Europe/Stockholm', month: 'long', year: 'numeric' }))}</h3>Priserna gäller från nu och framåt. Förbrukningen och månadens topp kommer från E.ON:s mätare, som skickar värdena ungefär ett dygn i efterhand: <strong>en topp i dag syns här först i morgon</strong>${lastMeter ? ` (senaste mätvärdet: ${esc(svDay(lastMeter - 1))} kl. ${svTime(lastMeter)})` : ''}. Vi har ännu ingen mätare som läses av direkt; en Carlo Gavazzi-mätare vid matningen planeras till nästa år, och då kan sidan visa den pågående timmen mot månadens topp.</div>
+    <div class="notice"><h3>Priser och snabba fakta om ${esc(new Date(now).toLocaleDateString('sv-SE', { timeZone: 'Europe/Stockholm', month: 'long', year: 'numeric' }))}</h3>Priserna gäller från nu och framåt. Förbrukningen och månadens topp kommer från E.ON:s mätare, som skickar värdena ungefär ett dygn i efterhand: <strong>en topp i dag syns här först i morgon</strong>${lastMeter ? ` (senaste mätvärdet: ${esc(svDay(lastMeter - 1))} kl. ${svTime(lastMeter)})` : ''}. Vi läser ännu inte av mätaren direkt; med en läsare på huvudmätarens HAN-port kan sidan visa den pågående timmen mot månadens topp.</div>
     <div class="now-tiles">
       <div class="card tile"><div class="label">Pris just nu (${svTime(cur.at)}–${svTime(cur.at + 15 * 60_000)})</div><div class="value">${svNum(cur.totalOre / 100, 2)} kr/kWh</div><div class="hint"><i class="swatch" style="background:${levelOf(cur.totalOre).color}"></i> ${levelOf(cur.totalOre).label} · exkl. moms</div></div>
       ${cheap3 ? `<div class="card tile"><div class="label">Billigaste 3 timmarna framåt</div><div class="value">${svTime(cheap3.start)}–${svTime(cheap3.end)}</div><div class="hint">${esc(svDay(cheap3.start))} · snitt ${svNum(cheap3.meanOre / 100, 2)} kr/kWh</div></div>` : ''}
@@ -2897,7 +2897,8 @@ async function renderSolar() {
   if (s.site === undefined) {
     // The golf course (OpenStreetMap) and the glare runs (tools/roof-solar/site-layers.mjs); optional.
     s.site = await fetch('data/solar-site.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-    s.glare ??= s.site?.glare?.[0]?.key || null;
+    // ?glare=kansli-w opens the 3D model on that glare run (for links).
+    s.glare ??= new URLSearchParams(location.search).get('glare') || s.site?.glare?.[0]?.key || null;
   }
   const buildings = s.data.buildings.filter((b) => !b.error);
   const pick = (keys) => buildings.filter((b) => keys.includes(b.key));

@@ -2847,7 +2847,7 @@ function feedersHtml() {
   const club = FEEDERS.links.find((l) => l.key === 'clubhouse');
   const sizes = [5, 10, 20, 30];
   return `<div class="card">
-    <div class="card-head"><h3>The cables between the buildings</h3><span class="subtle">from the ground cabinet at the water treatment plant, where the club’s one E.ON meter is</span></div>
+    <div class="card-head"><h3>The cables between the buildings</h3><span class="subtle">from the ground cabinet, where the club’s one E.ON meter is</span></div>
     <div class="table-wrap"><table>
       <thead><tr><th>Feeder</th><th>Cable</th><th>Conductor</th><th class="num">Current (buried)</th><th class="num">≈ Power, 400 V 3-phase</th><th class="num">Length</th></tr></thead>
       <tbody>${FEEDERS.links.map((l) => `<tr><td>${esc(l.label)}</td><td class="mono">${esc(l.cable)}</td><td>${esc(l.material)}</td><td class="num">${esc(l.amps)}</td><td class="num">${esc(l.kw)}</td><td class="num">${l.lengthM ? `~${l.lengthM} m` : ''}</td></tr>`).join('')}</tbody>

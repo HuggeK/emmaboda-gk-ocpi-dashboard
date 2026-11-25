@@ -131,8 +131,8 @@ export const FEEDER_CABLE = {
   ],
 };
 
-// The feeder cables from the ground-mounted meter cabinet at the water
-// treatment plant, where the facility's single E.ON meter sits, as in the
+// The feeder cables from the ground cabinet, where the facility's single
+// E.ON meter sits, as in the
 // club's energy analysis (v1.31, July 2026, §2: the single-line diagram by
 // Emmaboda Elteknik, 2021-04-15). Currents are guide values for buried
 // 0.6/1 kV cable; the real limit is the fuse and the installation method.
